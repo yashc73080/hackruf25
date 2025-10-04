@@ -40,4 +40,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+
+*.pdf
+
+
 teamskills-474117-5ac11a782ba3.json
