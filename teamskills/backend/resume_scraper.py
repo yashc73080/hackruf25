@@ -29,6 +29,7 @@ import io
 import json
 import re
 from typing import Dict, List, Optional
+import os
 
 # core deps
 import pdfplumber
@@ -331,6 +332,16 @@ def main():
     # read file bytes
     with open(args.pdf_path, "rb") as f:
         content = f.read()
+
+    # optional: save uploaded resume to uploads/ for later reference
+    uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
+    try:
+        os.makedirs(uploads_dir, exist_ok=True)
+        dst = os.path.join(uploads_dir, os.path.basename(args.pdf_path))
+        with open(dst, "wb") as outp:
+            outp.write(content)
+    except Exception:
+        pass
 
     text = extract_text_pdf_bytes(content)
     if args.use_ocr and len(text) < 200:

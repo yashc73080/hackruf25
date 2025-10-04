@@ -1,4 +1,11 @@
-import os, sys, json, requests
+import base64
+import json
+import os
+import sys
+import time
+from typing import Optional
+
+import requests
 from dotenv import load_dotenv
 
 # ---------------- Setup ----------------
@@ -9,11 +16,38 @@ TOKEN = os.environ.get("GITHUB_TOKEN")
 HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 REST_HEADERS = {"Authorization": f"token {TOKEN}"} if TOKEN else {}
 
+# Simple on-disk cache to reduce repeated GitHub calls during hackathon
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def _cache_get(key: str, ttl: int = 3600) -> Optional[dict]:
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    try:
+        if not os.path.exists(path):
+            return None
+        mtime = os.path.getmtime(path)
+        if time.time() - mtime > ttl:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _cache_set(key: str, value: dict):
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(value, f)
+    except Exception:
+        pass
+
+
 def get_json(url):
     r = requests.get(url, headers=REST_HEADERS)
     if r.status_code == 200:
         return r.json()
     return None
+
 
 def post_graphql(query, variables=None):
     if not TOKEN:
@@ -103,6 +137,35 @@ def list_contributed_repos_events(user, max_repos=30, max_pages=3):
                     if len(repos) >= max_repos:
                         return repos
     return repos
+
+
+# ---------------- README & repo README fetch ----------------
+def get_repo_readme(owner: str, name: str) -> Optional[str]:
+    """
+    Returns decoded README content (first ~2000 chars) or None.
+    """
+    key = f"readme_{owner}_{name}"
+    cached = _cache_get(key)
+    if cached:
+        return cached.get("readme")
+    url = f"{API}/repos/{owner}/{name}/readme"
+    r = requests.get(url, headers=REST_HEADERS)
+    if r.status_code != 200:
+        _cache_set(key, {"readme": None})
+        return None
+    try:
+        j = r.json()
+        content = j.get("content")
+        encoding = j.get("encoding")
+        if content and encoding == "base64":
+            raw = base64.b64decode(content).decode("utf-8", errors="replace")
+            snippet = raw[:2000]
+            _cache_set(key, {"readme": snippet})
+            return snippet
+    except Exception:
+        pass
+    _cache_set(key, {"readme": None})
+    return None
 
 # ---------------- Repo meta & languages ----------------
 def get_repo_meta(owner, name):
@@ -215,6 +278,8 @@ def summarize_user(user):
         for k, v in lbs.items():
             overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
 
+        readme = get_repo_readme(owner, name)
+
         per_repo.append({
             "repo": name,
             "owner": owner,
@@ -222,24 +287,25 @@ def summarize_user(user):
             "language_percentages": to_percentages(lbs),
             "primary_language": (max(lbs, key=lbs.get) if lbs else None),
             "stars": stars or 0,
-            "updated_at": updated_at
+            "updated_at": updated_at,
+            "readme_snippet": readme,
         })
 
-    # 5) top 3: by stars desc, then updated_at desc (tie-break)
+    # 5) top N: by updated_at (recent) then stars (tie-break) — choose top 5 for default
     per_repo_sorted = sorted(
         per_repo,
-        key=lambda x: (x["stars"], x["updated_at"] or ""),
-        reverse=True
+        key=lambda x: (x.get("updated_at") or "", x.get("stars", 0)),
+        reverse=True,
     )
-    top_repos = per_repo_sorted[:3]
+    top_repos = per_repo_sorted[:5]
 
     return {
         "username": user,
         "included_collaborations": True,
         "overall_language_percentages": to_percentages(overall_bytes),
-        "selection_strategy": "stars_then_recent",
+        "selection_strategy": "recent_then_stars",
         "top_repos": top_repos,
-        "repos": per_repo  # full list for flexibility
+        "repos": per_repo,  # full list for flexibility
     }
 
 # ---------------- CLI ----------------
