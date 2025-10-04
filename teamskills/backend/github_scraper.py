@@ -1,96 +1,133 @@
 import os, sys, json, requests
 from dotenv import load_dotenv
 
-# ---------------- Setup ----------------
+# ---------- Setup ----------
 load_dotenv()
 API = "https://api.github.com"
-GITHUB_GRAPHQL = f"{API}/graphql"
-TOKEN = os.environ.get("GITHUB_TOKEN")
-HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
+GRAPHQL_URL = f"{API}/graphql"
+
+TOKEN = os.getenv("GITHUB_TOKEN")
 REST_HEADERS = {"Authorization": f"token {TOKEN}"} if TOKEN else {}
+GQL_HEADERS  = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 
-def get_json(url):
-    r = requests.get(url, headers=REST_HEADERS)
-    if r.status_code == 200:
-        return r.json()
-    return None
+# ---------- HTTP helpers ----------
+def rest_get_json(url):
+    r = requests.get(url, headers=REST_HEADERS if TOKEN else {})
+    return r.json() if r.status_code == 200 else None
 
-def post_graphql(query, variables=None):
+def graphql_post(query, variables=None):
     if not TOKEN:
         return None
-    payload = {"query": query, "variables": variables or {}}
-    r = requests.post(GITHUB_GRAPHQL, headers=HEADERS, json=payload)
-    if r.status_code == 200:
-        j = r.json()
-        if "errors" in j:
-            return None
-        return j
-    return None
+    r = requests.post(GRAPHQL_URL, headers=GQL_HEADERS, json={"query": query, "variables": variables or {}})
+    if r.status_code != 200:
+        return None
+    j = r.json()
+    if "errors" in j:
+        return None
+    return j
 
-# ---------------- Owned repos (REST) ----------------
-def list_owned_repos(user):
-    # user's own public repos
-    url = f"{API}/users/{user}/repos?per_page=100&type=owner&sort=updated"
-    return get_json(url) or []
+# ---------- Authenticated user ----------
+def get_authenticated_login():
+    if not TOKEN:
+        return None
+    me = rest_get_json(f"{API}/user")
+    return me.get("login") if me else None
 
-# ---------------- Contributed repos (GraphQL preferred) ----------------
-def list_contributed_repos_graphql(user, first=100):
+# ---------- Data fetch ----------
+def list_affiliated_repos_for_self():
     """
-    Uses GraphQL to fetch repositories the user contributed to (public).
-    Requires a token. Returns list of dicts with owner, name, stars, updated_at.
+    For the authenticated user only:
+    Include repos where you are owner, collaborator, or org member.
     """
     if not TOKEN:
         return []
+    repos = []
+    page = 1
+    while True:
+        url = f"{API}/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&page={page}"
+        data = rest_get_json(url) or []
+        if not data:
+            break
+        repos.extend(data)
+        if len(data) < 100:
+            break
+        page += 1
+    return repos
+
+def list_owned_repos(user):
+    url = f"{API}/users/{user}/repos?per_page=100&type=owner&sort=updated"
+    return rest_get_json(url) or []
+
+def list_contributed_repos_graphql(user, first=100):
+    """
+    All-time contributed repos via top-level GraphQL field (not time-limited).
+    Public by default; include private if token has `repo` scope and user == token owner (or you have access).
+    Paginates.
+    """
+    if not TOKEN:
+        return []
+
     query = """
-    query($login: String!, $first: Int!) {
+    query($login: String!, $first: Int!, $after: String) {
       user(login: $login) {
-        contributionsCollection {
-          repositoriesContributedTo(first: $first, includeUserRepositories: true) {
-            nodes {
-              nameWithOwner
-              stargazerCount
-              updatedAt
-              isFork
-            }
+        repositoriesContributedTo(
+          first: $first,
+          after: $after,
+          includeUserRepositories: true,
+          contributionTypes: [COMMIT, ISSUE, PULL_REQUEST, REPOSITORY],
+          orderBy: {field: PUSHED_AT, direction: DESC}
+        ) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            nameWithOwner
+            stargazerCount
+            updatedAt
+            isPrivate
           }
         }
       }
     }
     """
-    data = post_graphql(query, {"login": user, "first": first})
-    if not data:
-        return []
-    nodes = data.get("data", {}).get("user", {}) \
-                .get("contributionsCollection", {}) \
-                .get("repositoriesContributedTo", {}) \
-                .get("nodes", []) or []
-    out = []
-    for n in nodes:
-        full = n.get("nameWithOwner", "")
-        if "/" in full:
-            owner, name = full.split("/", 1)
-            out.append({
-                "owner": owner,
-                "name": name,
-                "stargazers_count": n.get("stargazerCount", 0),
-                "updated_at": n.get("updatedAt"),
-            })
+
+    vars = {"login": user, "first": 100, "after": None}
+    out, seen = [], set()
+    for _ in range(20):
+        data = graphql_post(query, vars)
+        if not data:
+            break
+        block = (data.get("data", {})
+                    .get("user", {})
+                    .get("repositoriesContributedTo", {}))
+        nodes = block.get("nodes", []) or []
+        for n in nodes:
+            full = n.get("nameWithOwner", "")
+            if "/" in full and full not in seen:
+                seen.add(full)
+                owner, name = full.split("/", 1)
+                out.append({
+                    "owner": owner,
+                    "name": name,
+                    "stargazers_count": n.get("stargazerCount", 0),
+                    "updated_at": n.get("updatedAt"),
+                    "is_private": n.get("isPrivate", False)
+                })
+        if not block.get("pageInfo", {}).get("hasNextPage"):
+            break
+        vars["after"] = block["pageInfo"]["endCursor"]
     return out
 
-# ---------------- Contributed repos (fallback via Events) ----------------
 def list_contributed_repos_events(user, max_repos=30, max_pages=3):
     """
-    Fallback: recent public PushEvents to capture recent collabs.
-    Returns list of {owner, name}. Stars/updated_at will be filled via repo meta call.
+    Fallback: recent public PushEvents (works without token).
+    Returns [{owner, name}]
     """
-    repos = []
-    seen = set()
+    repos, seen = [], set()
     for page in range(1, max_pages + 1):
         url = f"{API}/users/{user}/events/public?per_page=100&page={page}"
-        r = requests.get(url, headers=REST_HEADERS)
+        r = requests.get(url, headers=REST_HEADERS if TOKEN else {})
         if r.status_code != 200:
             break
-        events = r.json()
+        events = r.json() or []
         if not events:
             break
         for ev in events:
@@ -104,15 +141,13 @@ def list_contributed_repos_events(user, max_repos=30, max_pages=3):
                         return repos
     return repos
 
-# ---------------- Repo meta & languages ----------------
 def get_repo_meta(owner, name):
-    url = f"{API}/repos/{owner}/{name}"
-    return get_json(url) or {}
+    return rest_get_json(f"{API}/repos/{owner}/{name}") or {}
 
 def repo_lang_bytes(owner, name):
-    url = f"{API}/repos/{owner}/{name}/languages"
-    return get_json(url) or {}
+    return rest_get_json(f"{API}/repos/{owner}/{name}/languages") or {}
 
+# ---------- Processing ----------
 def fold_notebooks_into_python(lang_bytes: dict):
     jb = lang_bytes.pop("Jupyter Notebook", 0)
     if jb:
@@ -137,112 +172,101 @@ def repo_entry(owner, meta, lang_bytes):
         "updated_at": meta.get("updated_at"),
     }
 
-# ---------------- Summarize ----------------
+# ---------- Core summary ----------
 def summarize_user(user):
-    # 1) owned repos (REST provides all meta we need)
-    owned_raw = list_owned_repos(user)
-
-    # 2) contributed repos
-    collab = list_contributed_repos_graphql(user, first=100)
-    if not collab:
-        # fallback to Events if GraphQL unavailable
-        collab_simple = list_contributed_repos_events(user, max_repos=30, max_pages=3)
-        # fill meta via REST
-        filled = []
-        for c in collab_simple:
-            meta = get_repo_meta(c["owner"], c["name"])
-            if meta:
-                filled.append({
-                    "owner": c["owner"],
-                    "name": c["name"],
-                    "stargazers_count": meta.get("stargazers_count", 0),
-                    "updated_at": meta.get("updated_at")
-                })
-        collab = filled
-
-    # 3) merge (dedupe by owner/name)
-    seen = set()
-    all_repos = []
-
-    # owned
-    for r in owned_raw:
-        owner = user
-        name = r["name"]
-        key = f"{owner}/{name}"
-        if key in seen: 
-            continue
-        seen.add(key)
-        all_repos.append({
-            "owner": owner,
-            "name": name,
-            "stargazers_count": r.get("stargazers_count", 0),
-            "updated_at": r.get("updated_at"),
-            "description": r.get("description") or ""
-        })
-
-    # contributed
-    for c in collab:
-        owner = c.get("owner")
-        name = c.get("name")
-        if not owner or not name:
-            continue
-        key = f"{owner}/{name}"
-        if key in seen:
-            continue
-        seen.add(key)
-        all_repos.append({
-            "owner": owner,
-            "name": name,
-            "stargazers_count": c.get("stargazers_count", 0),
-            "updated_at": c.get("updated_at"),
-            "description": ""  # will be filled by meta if needed
-        })
-
-    # 4) build per-repo entries with languages & ensure meta is complete
-    overall_bytes = {}
+    authenticated = get_authenticated_login()
     per_repo = []
-    for item in all_repos:
-        owner = item["owner"]
-        name = item["name"]
+    overall_bytes = {}
+    seen = set()
 
-        # fetch meta if description missing (for contributed ones)
-        meta = get_repo_meta(owner, name)
-        desc = meta.get("description") if meta else item.get("description", "")
-        stars = meta.get("stargazers_count", item.get("stargazers_count", 0))
-        updated_at = meta.get("updated_at", item.get("updated_at"))
+    if authenticated and authenticated.lower() == user.lower():
+        # Same user as token owner: include owner + collaborator + org repos directly
+        affiliated = list_affiliated_repos_for_self()
+        for r in affiliated:
+            owner = r.get("owner", {}).get("login") or user
+            name = r["name"]
+            key = f"{owner}/{name}"
+            if key in seen:
+                continue
+            seen.add(key)
 
-        lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
-        for k, v in lbs.items():
-            overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
+            meta = get_repo_meta(owner, name)
+            if not meta:
+                continue
+            if meta.get("private") and not TOKEN:
+                continue
 
-        per_repo.append({
-            "repo": name,
-            "owner": owner,
-            "description": desc or "",
-            "language_percentages": to_percentages(lbs),
-            "primary_language": (max(lbs, key=lbs.get) if lbs else None),
-            "stars": stars or 0,
-            "updated_at": updated_at
-        })
+            lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
+            for k, v in lbs.items():
+                overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
+            per_repo.append(repo_entry(owner, meta, lbs))
+    else:
+        # Different username: include public owned + contributed
+        owned = list_owned_repos(user)
+        for r in owned:
+            owner = user
+            name = r["name"]
+            key = f"{owner}/{name}"
+            if key in seen:
+                continue
+            seen.add(key)
 
-    # 5) top 3: by stars desc, then updated_at desc (tie-break)
-    per_repo_sorted = sorted(
-        per_repo,
-        key=lambda x: (x["stars"], x["updated_at"] or ""),
-        reverse=True
-    )
+            meta = get_repo_meta(owner, name)
+            if not meta:
+                continue
+            lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
+            for k, v in lbs.items():
+                overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
+            per_repo.append(repo_entry(owner, meta, lbs))
+
+        contributed = list_contributed_repos_graphql(user, first=100)
+        if not contributed:
+            # fallback to public recent events
+            evs = list_contributed_repos_events(user, max_repos=30, max_pages=3)
+            tmp = []
+            for e in evs:
+                m = get_repo_meta(e["owner"], e["name"])
+                if m:
+                    tmp.append({
+                        "owner": e["owner"],
+                        "name": e["name"],
+                        "stargazers_count": m.get("stargazers_count", 0),
+                        "updated_at": m.get("updated_at"),
+                    })
+            contributed = tmp
+
+        for c in contributed:
+            owner, name = c["owner"], c["name"]
+            key = f"{owner}/{name}"
+            if key in seen:
+                continue
+            seen.add(key)
+
+            meta = get_repo_meta(owner, name)
+            if not meta:
+                continue
+            if meta.get("private") and not TOKEN:
+                continue
+
+            lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
+            for k, v in lbs.items():
+                overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
+            per_repo.append(repo_entry(owner, meta, lbs))
+
+    # Top 3 by stars desc, then updated_at desc
+    per_repo_sorted = sorted(per_repo, key=lambda x: (x["stars"], x["updated_at"] or ""), reverse=True)
     top_repos = per_repo_sorted[:3]
 
     return {
         "username": user,
-        "included_collaborations": True,
-        "overall_language_percentages": to_percentages(overall_bytes),
+        "included_contributions": bool(TOKEN),
         "selection_strategy": "stars_then_recent",
+        "overall_language_percentages": to_percentages(overall_bytes),
         "top_repos": top_repos,
-        "repos": per_repo  # full list for flexibility
+        "repos": per_repo
     }
 
-# ---------------- CLI ----------------
+# ---------- CLI ----------
 def main():
     if len(sys.argv) < 2:
         print("usage: python github_langs_all.py <github_username> [--out out.json]")
@@ -256,10 +280,10 @@ def main():
     result = summarize_user(username)
     text = json.dumps(result, indent=2)
     print(text)
-
     if out_path:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(text)
+            
 
 if __name__ == "__main__":
     main()
