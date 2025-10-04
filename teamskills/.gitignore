@@ -50,4 +50,5 @@ next-env.d.ts
 *.txt
 
 teamskills-474117-5ac11a782ba3.json
+.vscode/* 
 *.env
