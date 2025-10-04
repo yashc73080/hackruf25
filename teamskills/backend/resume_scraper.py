@@ -1,383 +1,176 @@
 #!/usr/bin/env python3
 """
-Resume Ingestor (Local File → JSON → optional MongoDB)
-- Reads a local PDF resume file
-- Extracts text (pdfplumber; optional OCR fallback)
-- Splits into sections (Education / Experience / Skills, etc.)
-- Parses each section into structured JSON
-- Prints JSON or saves to a file; optionally inserts into MongoDB
-
+resume_scraper.py
 Usage:
-  python resume_ingest_local.py /path/to/resume.pdf \
-      --json-out parsed.json \
-      --use-ocr                     # try OCR fallback if needed
-      --mongo "mongodb://localhost:27017" --db skillsync --collection candidates
+  python resume_scraper.py --input "/path/to/resume.pdf" --output "resume.txt" [--threshold 500]
+
+Behavior:
+- If input is a PDF: try pdfplumber first.
+- If the result text length < threshold, use Google Cloud Vision OCR as fallback.
+- If input is an image: use Google Cloud Vision directly.
 
 Dependencies:
-  pip install pdfplumber python-dateutil
-  # optional OCR fallback:
-  pip install pytesseract pillow pdf2image
-  # optional DB:
-  pip install pymongo
-
-Note: For OCR fallback (pdf2image), you may need system poppler.
+  pip install pdfplumber
+  pip install google-cloud-vision pdf2image pillow   # for Vision OCR and PDF->image
+System deps for PDF->image:
+  - Poppler (required by pdf2image): choco install poppler  |  brew install poppler  |  apt-get install poppler-utils
+Env:
+  - GOOGLE_APPLICATION_CREDENTIALS must point to your service account JSON for Vision.
 """
 
 import argparse
-import datetime
 import io
-import json
-import re
-from typing import Dict, List, Optional
+import os
+import sys
+from typing import List
 
-# core deps
-import pdfplumber
-from dateutil import parser as dateparse
+# --- Optional imports guarded at use-time ---
+def _import_pdfplumber():
+    try:
+        import pdfplumber  # type: ignore
+        return pdfplumber
+    except Exception as e:
+        raise RuntimeError("pdfplumber not installed. Run: pip install pdfplumber") from e
 
-# optional deps guarded at use-time
-try:
-    from pymongo import MongoClient, ASCENDING  # type: ignore
-except Exception:
-    MongoClient = None  # type: ignore
-    ASCENDING = 1  # dummy
-
-# -----------------------------
-# Config / Taxonomies
-# -----------------------------
-SKILL_TAXONOMY = {
-    "python": {"python", "py"},
-    "javascript": {"javascript", "js"},
-    "typescript": {"typescript", "ts"},
-    "react": {"react", "reactjs", "react.js"},
-    "node": {"node", "nodejs", "node.js"},
-    "java": {"java"},
-    "c++": {"c++", "cpp"},
-    "c": {"c"},
-    "matlab": {"matlab"},
-    "aws": {"aws", "amazon web services"},
-    "gcp": {"gcp", "google cloud"},
-    "azure": {"azure"},
-    "tensorflow": {"tensorflow", "tf"},
-    "pytorch": {"pytorch", "torch"},
-    "sql": {"sql", "postgres", "mysql", "sqlite"},
-    "html": {"html"},
-    "css": {"css", "tailwind", "bootstrap"},
-    "docker": {"docker"},
-    "kubernetes": {"kubernetes", "k8s"},
-    "git": {"git", "github", "gitlab"},
-}
-
-HEADER_ALIASES = {
-    "education": {"education", "academics", "academic background"},
-    "experience": {"experience", "work experience", "professional experience", "employment"},
-    "skills": {"skills", "technical skills", "technologies", "toolbox"},
-    "projects": {"projects", "selected projects"},
-    "certifications": {"certifications", "certificates", "licenses"},
-    "publications": {"publications", "papers"},
-    "awards": {"awards", "achievements", "honors"},
-    "summary": {"summary", "objective", "profile"},
-}
-
-SECTION_BULLET = re.compile(r"^\s*[-•\u2022\u25CF\u25AA]\s+")
-DATE_RANGE = re.compile(
-    r"(?P<start>(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s?\d{4}|\d{4})\s*[-–—]\s*(?P<end>(Present|Current|Now|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s?\d{4}|\d{4}))",
-    re.IGNORECASE,
-)
-DEGREE_PAT = re.compile(r"(B\.?S\.?|BSc|Bachelor|M\.?S\.?|MSc|Master|Ph\.?D\.?|PhD|B\.?Tech|B\.?E\.?)", re.IGNORECASE)
-GPA_PAT = re.compile(r"GPA[:\s]+([0-4]\.\d{1,2}|\d\.\d{1,2})", re.IGNORECASE)
-
-# -----------------------------
-# PDF Text Extraction
-# -----------------------------
-
-def extract_text_pdf_bytes(content: bytes) -> str:
-    with pdfplumber.open(io.BytesIO(content)) as pdf:
-        texts = []
-        for p in pdf.pages:
-            t = p.extract_text() or ""
-            texts.append(t)
-        return "\n".join(texts).strip()
-
-
-def ocr_pdf_bytes(content: bytes) -> str:
-    """OCR fallback for scanned PDFs. Requires pdf2image + pytesseract."""
+def _import_vision_and_pdf2image():
+    try:
+        from google.cloud import vision  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "google-cloud-vision not installed or credentials missing. "
+            "Run: pip install google-cloud-vision"
+        ) from e
     try:
         from pdf2image import convert_from_bytes  # type: ignore
-        import pytesseract  # type: ignore
-    except Exception:
-        return ""
-    pages = convert_from_bytes(content)
-    return "\n".join(pytesseract.image_to_string(im) for im in pages)
+    except Exception as e:
+        raise RuntimeError(
+            "pdf2image not installed. Run: pip install pdf2image pillow\n"
+            "Also install Poppler: choco install poppler | brew install poppler | apt-get install poppler-utils"
+        ) from e
+    return vision, convert_from_bytes
 
-# -----------------------------
-# Sectioning / Parsing
-# -----------------------------
+# --- Extractors ---
+def extract_with_pdfplumber(pdf_path: str) -> str:
+    pdfplumber = _import_pdfplumber()
+    text_parts: List[str] = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            t = page.extract_text() or ""
+            if t.strip():
+                text_parts.append(t.strip())
+    return "\n\n\f\n\n".join(text_parts).strip()  # add form-feed between pages
 
-def find_headers(lines: List[str]) -> List[int]:
-    idxs = []
-    for i, line in enumerate(lines):
-        raw = line.strip()
-        lower = raw.lower().strip(":")
-        if any(lower in v for v in HEADER_ALIASES.values()):
-            idxs.append(i)
-            continue
-        # heuristic header: ALL CAPS short line or title-like with colon
-        if (raw.isupper() and 3 <= len(raw) <= 40) or re.match(r"^[A-Za-z &/]{3,}:\s*$", raw):
-            idxs.append(i)
-    return sorted(set(idxs))
+def extract_with_gcv(input_path: str) -> str:
+    """
+    Uses Google Cloud Vision OCR.
+    - If input is PDF: render pages to images (via pdf2image) then OCR each page.
+    - If input is image: OCR directly.
+    """
+    vision, convert_from_bytes = _import_vision_and_pdf2image()
+    client = vision.ImageAnnotatorClient()
 
+    ext = os.path.splitext(input_path)[1].lower()
+    is_pdf = ext == ".pdf"
 
-def label_header(text: str) -> str:
-    lower = text.lower().strip(": ")
-    for label, aliases in HEADER_ALIASES.items():
-        if lower in aliases:
-            return label
-    return lower
-
-
-def split_sections(full_text: str) -> Dict[str, str]:
-    lines = full_text.splitlines()
-    hdr_idx = find_headers(lines)
-    if not hdr_idx:
-        return {"unknown": full_text}
-    hdr_idx.append(len(lines))
-    sections: Dict[str, str] = {}
-    for a, b in zip(hdr_idx, hdr_idx[1:]):
-        header = label_header(lines[a])
-        body = "\n".join(lines[a + 1 : b]).strip()
-        sections[header] = (sections.get(header, "") + ("\n" if header in sections else "") + body).strip()
-    return sections
-
-
-def norm_date(s: str) -> Optional[str]:
-    s = s.replace("–", "-").replace("—", "-").replace("to", "-")
-    s = re.sub(r"\b(Present|Current|Now)\b", "", s, flags=re.I).strip()
-    if not s:
-        return None
     try:
-        d = dateparse.parse(s, default=datetime.datetime(2000, 1, 1))
-        return d.date().isoformat()
-    except Exception:
-        return None
+        with open(input_path, "rb") as f:
+            content = f.read()
+    except Exception as e:
+        raise RuntimeError(f"Could not read file: {input_path}") from e
 
+    texts: List[str] = []
 
-def parse_education(text: str) -> List[dict]:
-    if not text:
-        return []
-    blocks = re.split(r"\n\s*\n", text.strip())
-    out: List[dict] = []
-    for b in blocks:
-        line = " ".join(l.strip() for l in b.splitlines())
-        degree = None; major = None; inst = None; gpa = None; sdate = None; edate = None
-        m = DEGREE_PAT.search(line)
-        if m:
-            degree = m.group(1).upper().replace(".", "")
-        inst_match = re.search(r"\b(University|College|Institute|School|Polytechnic|Rutgers[a-zA-Z ,]*)\b", line, re.I)
-        if inst_match:
-            inst = inst_match.group(0)
-        maj_match = re.search(
-            r"(Computer Science|Electrical( and)? Computer Engineering|Data Science|Mathematics|Physics|Statistics|Mechanical Engineering|Aerospace|Information Technology)",
-            line,
-            re.I,
-        )
-        if maj_match:
-            major = maj_match.group(0)
-        g = GPA_PAT.search(line)
-        if g:
-            try:
-                gpa = float(g.group(1))
-            except Exception:
-                pass
-        dr = DATE_RANGE.search(line)
-        if dr:
-            sdate = norm_date(dr.group("start"))
-            edate = norm_date(dr.group("end"))
-        entry = {
-            "institution": inst,
-            "degree": degree,
-            "major": major,
-            "start_date": sdate,
-            "end_date": edate,
-            "gpa": gpa,
-            "raw": line,
-        }
-        if any([inst, degree, major]):
-            out.append(entry)
-    return out
+    if is_pdf:
+        try:
+            pages = convert_from_bytes(content)  # requires Poppler
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to convert PDF to images (pdf2image/poppler). See install notes."
+            ) from e
+        for im in pages:
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            image = vision.Image(content=buf.getvalue())
+            resp = client.document_text_detection(image=image)
+            if resp.error.message:
+                raise RuntimeError(f"Vision error: {resp.error.message}")
+            if resp.full_text_annotation and resp.full_text_annotation.text:
+                texts.append(resp.full_text_annotation.text.strip())
+    else:
+        # assume it is an image (png/jpg/jpeg/tiff)
+        image = vision.Image(content=content)
+        resp = client.document_text_detection(image=image)
+        if resp.error.message:
+            raise RuntimeError(f"Vision error: {resp.error.message}")
+        if resp.full_text_annotation and resp.full_text_annotation.text:
+            texts.append(resp.full_text_annotation.text.strip())
 
+    return "\n\n\f\n\n".join([t for t in texts if t]).strip()
 
-def parse_experience(text: str) -> List[dict]:
-    if not text:
-        return []
-    lines = [l for l in text.splitlines() if l.strip()]
-    entries: List[dict] = []
-    cur = {"company": None, "title": None, "location": None, "start_date": None, "end_date": None, "bullets": [], "tech": []}
-    for i, l in enumerate(lines):
-        line = l.strip().replace("—", "-")
-        if DATE_RANGE.search(line) or ("@" in line) or (i == 0):
-            if cur["company"] or cur["title"] or cur["bullets"]:
-                entries.append(cur)
-                cur = {"company": None, "title": None, "location": None, "start_date": None, "end_date": None, "bullets": [], "tech": []}
-            if "@" in line:
-                parts = [p.strip() for p in line.split("@", 1)]
-                cur["title"] = parts[0]
-                cur["company"] = parts[1]
-            else:
-                parts = [p.strip() for p in re.split(r"[-–—]\s*", line, maxsplit=1)]
-                if len(parts) == 2:
-                    if re.search(r"(Inc\.?|LLC|Labs|University|Corp\.?)", parts[0], re.I):
-                        cur["company"], cur["title"] = parts[0], parts[1]
-                    else:
-                        cur["title"], cur["company"] = parts[0], parts[1]
-                else:
-                    cur["title"] = line
-            m = DATE_RANGE.search(line)
-            if m:
-                cur["start_date"] = norm_date(m.group("start"))
-                cur["end_date"] = norm_date(m.group("end"))
-        elif SECTION_BULLET.match(line):
-            cur["bullets"].append(re.sub(SECTION_BULLET, "", line).strip())
-        else:
-            if re.search(r"[A-Za-z]+,\s*[A-Z]{2}\b", line):
-                cur["location"] = line
-            else:
-                for canon, aliases in SKILL_TAXONOMY.items():
-                    for a in aliases:
-                        if re.search(rf"\\b{re.escape(a)}\\b", line, re.I):
-                            cur["tech"].append(canon)
-    if cur["company"] or cur["title"] or cur["bullets"]:
-        entries.append(cur)
-    for e in entries:
-        e["tech"] = sorted(set(e["tech"]))
-    return entries
-
-
-def canonicalize_skill(token: str) -> Optional[dict]:
-    t = token.strip().lower()
-    if not t:
-        return None
-    for canon, aliases in SKILL_TAXONOMY.items():
-        if t in aliases:
-            return {"canonical": canon, "aliases": [token]}
-    return {"canonical": t, "aliases": [token]}
-
-
-def parse_skills(text: str) -> List[dict]:
-    if not text:
-        return []
-    raw = re.split(r"[,;/|•\u2022]\s*", text.replace("\n", " ").strip())
-    skills = []
-    for tok in raw:
-        c = canonicalize_skill(tok)
-        if c:
-            skills.append(c)
-    merged: Dict[str, dict] = {}
-    for s in skills:
-        k = s["canonical"]
-        merged.setdefault(k, {"canonical": k, "aliases": []})
-        merged[k]["aliases"].extend(s["aliases"])
-    for v in merged.values():
-        v["aliases"] = sorted(set(v["aliases"]))
-    return sorted(merged.values(), key=lambda x: x["canonical"])
-
-
-def parse_contact_name(full_text: str) -> dict:
-    first_line = full_text.splitlines()[0].strip() if full_text.splitlines() else None
-    email_match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", full_text)
-    phone_match = re.search(r"(\+?\d[\d\s\-\(\)]{7,}\d)", full_text)
-    loc_match = re.search(r"[A-Za-z .'-]+,\s*[A-Z]{2}\b", full_text)
-    name = first_line if first_line and len(first_line.split()) <= 6 else None
-    return {
-        "name": name,
-        "email": email_match.group(0) if email_match else None,
-        "phone": phone_match.group(0) if phone_match else None,
-        "location": loc_match.group(0) if loc_match else None,
-    }
-
-# -----------------------------
-# Mongo helpers (optional)
-# -----------------------------
-
-def maybe_insert_mongo(doc: dict, mongo_uri: Optional[str], db_name: Optional[str], coll_name: Optional[str]) -> Optional[str]:
-    if not mongo_uri or not db_name or not coll_name:
-        return None
-    if MongoClient is None:
-        raise RuntimeError("pymongo not installed. pip install pymongo")
-    client = MongoClient(mongo_uri)
-    coll = client[db_name][coll_name]
-    try:
-        coll.create_index([("skills.canonical", ASCENDING)])
-        coll.create_index([("experience.company", ASCENDING)])
-        coll.create_index([("name", ASCENDING)])
-    except Exception:
-        pass
-    res = coll.insert_one(doc)
-    return str(res.inserted_id)
-
-# -----------------------------
-# Main
-# -----------------------------
-
+# --- Main ---
 def main():
-    ap = argparse.ArgumentParser(description="Local PDF resume → JSON → optional MongoDB")
-    ap.add_argument("pdf_path", help="Path to local PDF resume")
-    ap.add_argument("--json-out", help="Path to write JSON output", default=None)
-    ap.add_argument("--use-ocr", action="store_true", help="Try OCR fallback if text is sparse")
-    ap.add_argument("--mongo", help="MongoDB URI (optional)", default=None)
-    ap.add_argument("--db", help="Mongo database name (optional)", default=None)
-    ap.add_argument("--collection", help="Mongo collection name (optional)", default=None)
+    ap = argparse.ArgumentParser(description="Scrape resume text with pdfplumber → fallback to Google Vision OCR")
+    ap.add_argument("--input", required=True, help="Path to resume file (PDF or image)")
+    ap.add_argument("--output", required=True, help="Path to write extracted text (.txt)")
+    ap.add_argument("--threshold", type=int, default=500,
+                    help="If initial extracted text length < threshold, fall back to Vision OCR (default: 500)")
     args = ap.parse_args()
 
-    # read file bytes
-    with open(args.pdf_path, "rb") as f:
-        content = f.read()
+    in_path = args.input
+    out_path = args.output
+    threshold = args.threshold
 
-    text = extract_text_pdf_bytes(content)
-    if args.use_ocr and len(text) < 200:
-        ocr_text = ocr_pdf_bytes(content)
-        if len(ocr_text) > len(text):
-            text = ocr_text
+    if not os.path.exists(in_path):
+        print(f"ERROR: Input path does not exist: {in_path}", file=sys.stderr)
+        sys.exit(2)
 
-    if not text:
-        raise SystemExit("ERROR: Could not extract any text from PDF. Try --use-ocr.")
+    ext = os.path.splitext(in_path)[1].lower()
 
-    sections = split_sections(text)
-    contact = parse_contact_name(text)
+    extracted = ""
+    used = ""
 
-    education = parse_education(sections.get("education", ""))
-    experience = parse_experience(sections.get("experience", ""))
-    skills = parse_skills(sections.get("skills", ""))
+    try:
+        if ext == ".pdf":
+            # 1) Try pdfplumber first
+            extracted = extract_with_pdfplumber(in_path)
+            used = "pdfplumber"
+        else:
+            # For images, go straight to Vision
+            extracted = ""
+            used = "none"
 
-    doc = {
-        "name": contact.get("name"),
-        "contact": {
-            "email": contact.get("email"),
-            "phone": contact.get("phone"),
-            "location": contact.get("location"),
-        },
-        "education": education,
-        "experience": experience,
-        "skills": skills,
-        "source": {
-            "filename": args.pdf_path.split("/")[-1],
-            "ingested_at": datetime.datetime.utcnow().isoformat() + "Z",
-        },
-        "raw_sections": {k: v[:4000] for k, v in sections.items()},
-    }
+        # 2) If short or empty, try Vision OCR
+        if len(extracted) < threshold:
+            gcv_text = extract_with_gcv(in_path)
+            if len(gcv_text) > len(extracted):
+                extracted = gcv_text
+                used = "vision"
+    except Exception as e:
+        # If pdfplumber fails, try Vision as a last resort
+        if ext == ".pdf":
+            try:
+                gcv_text = extract_with_gcv(in_path)
+                if gcv_text:
+                    extracted = gcv_text
+                    used = "vision (fallback after error)"
+                else:
+                    raise
+            except Exception as e2:
+                print(f"ERROR: Extraction failed. pdfplumber error: {e}\nVision error: {e2}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print(f"ERROR: Extraction failed: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    # optional Mongo insert
-    inserted_id = maybe_insert_mongo(doc, args.mongo, args.db, args.collection)
-    if inserted_id:
-        doc["_mongo_id"] = inserted_id
+    # Write output
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(extracted or "")
+    except Exception as e:
+        print(f"ERROR: Could not write output file: {out_path} ({e})", file=sys.stderr)
+        sys.exit(1)
 
-    # print pretty JSON
-    print(json.dumps(doc, indent=2, ensure_ascii=False))
-
-    # write JSON to file
-    if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2, ensure_ascii=False)
-        print(f"\nWrote JSON → {args.json_out}")
+    print(f"OK: wrote {len(extracted)} chars to '{out_path}' using {used}.")
 
 
 if __name__ == "__main__":

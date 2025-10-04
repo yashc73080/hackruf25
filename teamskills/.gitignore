@@ -43,3 +43,8 @@ next-env.d.ts
 
 *.pdf
 
+*.json
+*.png
+*.jpg
+*.jpeg
+*.txt
