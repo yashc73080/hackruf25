@@ -29,163 +29,215 @@ An AI-powered teammate-to-role matching tool that analyzes resumes and GitHub pr
 └── teamskills/
 		├── components.json
 		├── jsconfig.json
-		├── next.config.mjs
-		├── package.json
-		├── postcss.config.mjs
-		├── requirements.txt     # Frontend dev helper requirements (if any)
-		├── app/
-		│   ├── favicon.ico
-		│   ├── globals.css
-		│   ├── layout.js
-		│   ├── page.js          # Phase orchestrator and routing across pages
-		│   └── api/
-		│       ├── chat/route.js
-		│       ├── process-team-data/route.js
-		│       └── match-roles/route.js  # Proxy to FastAPI role matcher
-		├── backend/
-		│   ├── app.py           # FastAPI app
-		│   ├── gemini_helper.py
-		│   ├── github_scraper.py
-		│   ├── resume_scraper.py
-		│   ├── role_matcher.py  # Embedding + cosine similarity + domain amplifier
-		│   ├── requirements.txt # Python backend requirements
-		│   ├── test_gemini_helper.py
-		│   ├── test_github_scraper.py
-		│   ├── test_resume_scraper.py
-		│   └── (other tests / helpers)
-		├── components/
-		│   ├── ProjectPlanningChat.jsx
-		│   ├── TeamInputForm.jsx
-		│   ├── ProjectOverview.jsx
-		│   ├── RoleMatchResults.jsx
-		│   └── ui/          # Button, Card, Dialog, Input, etc.
-		├── lib/
-		│   └── utils.js
-		└── public/
-				├── file.svg
-				├── globe.svg
-				├── next.svg
-				├── vercel.svg
-				└── window.svg
-```
+		# SkillSync – AI‑Powered Team Role Assignment
 
----
+		SkillSync helps teams go from a rough idea to concrete roles and assignments in minutes. It:
 
-## How it works: pipeline by phases
+		- Refines a free‑form project idea into actionable specifications with an AI planning chat
+		- Gathers teammate info (names, GitHub, resumes) and extracts ranked skills via LLM + OCR
+		- Derives exactly one complementary role per teammate based on the project spec
+		- Matches people to roles using Gemini embeddings and cosine similarity, with transparent scoring
 
-The app keeps all phases mounted and navigates between them while preserving state. Proceed buttons are enabled only when downstream prerequisites are valid.
+		The app is split into a Next.js frontend (App Router) and a FastAPI backend.
 
-### Phase 1: Project planning (ProjectPlanningChat)
-- Objective: capture/iterate on the project idea and outputs like objectives, core features, and constraints.
-- Behavior:
-	- New chat messages mark planningDirty, which disables downstream proceed buttons until regeneration.
-	- When specifications are generated, specsReady is set and the user can proceed to the team input phase.
+		## Features
 
-### Phase 2: Team input (TeamInputForm)
-- Objective: gather teammates’ names, GitHub usernames, and resumes; then process to build skill vectors.
-- Steps on submit:
-	1) Upload each resume to a local cache and record absolute paths.
-	2) Derive roles for the team size from the specifications.
-	3) Process team data (scrape GitHub and parse resumes) to extract ranked arrays of skills, languages, and keywords.
-	4) Normalize member shapes for the frontend.
-	5) Cleanup local resume cache to avoid stale files.
-- Proceed logic: Proceed is disabled if planningDirty, teamDirty, or teamReady is false. Editing the team sets teamDirty and disables downstream proceeds until re-processed.
+		- End‑to‑end workflow: Planning → Team Input → Overview → Matching (state preserved between phases)
+		- Resume + GitHub analysis: pdfplumber and Google Cloud Vision OCR for resumes; GitHub REST/GraphQL for repos
+		- AI everywhere: Gemini 2.5 Flash Lite for planning/specs and for skill extraction; embeddings via models/embedding‑001
+		- Transparent results: per‑role candidate ranking with raw cosine and softmax-enhanced scores, plus winner inputs
+		- Domain awareness: optional anchor‑based boost nudges matches toward domain‑aligned candidates (frontend, backend, ML, etc.)
+		- Tunable: Top‑K strongest items per category, category weighting, softmax temperature (display separation)
+		- Hygiene: Frontend caches uploaded resumes under `.cache/resumes` and cleans up automatically after processing
 
-### Phase 3: Project overview (ProjectOverview)
-- Objective: review the project idea, roles, and team profiles; set Top-K tuning before matching.
-- Key UI elements:
-	- Back and Proceed buttons in the card header, consistently styled and spaced.
-	- Roles accordion with: Purpose, Responsibilities, Core Skills, Nice to Have, Collaboration Notes.
-	- Member cards with Programming Languages, Technical Skills, and Notable Keywords.
-	- Top-K control: choose how many strongest items per category (skills/languages/keywords) are considered.
-- Proceed logic: disabled if planningDirty or teamDirty or team not ready.
-- Match trigger: clicking “Match roles to members” (or header Proceed) calls Next.js API which proxies to FastAPI.
+		## Architecture
 
-### Phase 4: Role matching results (RoleMatchResults)
-- Objective: assign people to roles with transparent scoring.
-- Backend algorithm (role_matcher.py):
-	- Normalize roles to core_skills-only text for embedding.
-	- Normalize members to top-k arrays (skills/languages/keywords) and build embedding text with category weighting.
-	- Embeddings via Gemini models/embedding-001.
-	- Base similarity: cosine(role, member).
-	- Domain-aware amplifier: optional anchor-based alignment (frontend/backend/finance/healthcare/etc.) scales similarity up for same-domain matches and down for mismatches.
-	- Greedy assignment per role using the boosted similarities.
-	- UI readiness: returns per-role candidates with raw cosine and a softmax-enhanced score (cos*).
-- UI rendering:
-	- For each role:
-		- Shows bolded “Core skills:” summary derived from role debug.
-		- “Assigned to: <Name>” in indigo.
-		- A vertical list of horizontal bars (one per candidate), sorted by cos* descending.
-		- Bar width and color are driven by cos* (green near 1, red near 0). Label shows only (cos* …).
-		- Winner’s Top-K inputs listed beneath (skills, languages, keywords) from backend debug.
-	- A per-role log line summarizes the top match.
-- Tuning knobs:
-	- topK (Phase 3 UI) controls how many strongest items per category are used for members.
-	- Backend weights can emphasize skills/languages over keywords.
-	- domain_boost controls anchor selection, strength, and temperature.
-	- softmax_temperature controls display separation.
+		```
+		browser (Next.js App Router)
+		  ├─ Phase 1: ProjectPlanningChat → POST /api/chat (Gemini via @google/genai)
+		  │    └─ On confirmation → POST /api/extract-specifications  ┐
+		  ├─ Phase 2: TeamInputForm                                    │ proxy → FastAPI
+		  │    ├─ POST /api/upload-resume  (stores .cache/resumes)     │
+		  │    ├─ POST /api/extract-roles                              │
+		  │    └─ POST /api/process-team-data → backend /api/extract-skills
+		  ├─ Phase 3: ProjectOverview (review + set Top‑K)
+		  └─ Phase 4: RoleMatchResults → POST /api/match-roles → backend /api/match-roles
 
----
+		FastAPI backend
+		  ├─ /api/extract-specifications  (LLM: project spec JSON)
+		  ├─ /api/extract-roles          (LLM: N complementary roles w/ core_skills)
+		  ├─ /api/extract-skills         (resume OCR + GitHub → languages/skills/keywords)
+		  ├─ /api/match-roles            (embeddings + cosine + domain boost → assignment)
+		  └─ /resumes/*                  (serves stored resumes, if any)
+		```
 
-## Configuration
+		### Repo layout
 
-- Environment variables (placed in `teamskills/.env.local`):
-	- GEMINI_API_KEY (or GOOGLE_API_KEY): required for google.generativeai
-- Backend requirements (`teamskills/backend/requirements.txt`): install in a virtualenv.
-- Frontend Node version: use an LTS Node (see `teamskills/package.json`).
+		```
+		hackruf25/
+		├─ CHANGELOG.md
+		├─ team_members.json                              # simple backing store for backend
+		└─ teamskills/
+		   ├─ app/                                        # Next.js (App Router)
+		   │  ├─ page.js                                  # phase orchestrator
+		   │  ├─ layout.js, globals.css                   # UI shell & styles (Tailwind v4)
+		   │  └─ api/                                     # server routes (Node runtime)
+		   │     ├─ chat/route.js                         # calls @google/genai (Gemini) directly
+		   │     ├─ upload-resume/route.js                # saves to .cache/resumes
+		   │     ├─ cleanup-resumes/route.js              # clears cache
+		   │     ├─ extract-specifications/route.js       # proxy → FastAPI
+		   │     ├─ extract-roles/route.js                # proxy → FastAPI
+		   │     └─ process-team-data/route.js            # proxy → FastAPI /api/extract-skills
+		   ├─ components/                                 # UI components (shadcn‑style)
+		   │  ├─ ProjectPlanningChat.jsx
+		   │  ├─ TeamInputForm.jsx
+		   │  ├─ ProjectOverview.jsx
+		   │  ├─ RoleMatchResults.jsx
+		   │  └─ ui/{button,card,dialog,input,label}.jsx
+		   ├─ backend/                                    # FastAPI + analysis
+		   │  ├─ app.py                                   # endpoints & orchestration
+		   │  ├─ planning_extractor.py                    # LLM → specs & roles
+		   │  ├─ role_matcher.py                          # embeddings + cosine + domain boost
+		   │  ├─ skill_extractor.py                       # resumes + GitHub → skills
+		   │  ├─ resume_scraper.py                        # pdfplumber + Vision OCR
+		   │  ├─ github_scraper.py                        # REST/GraphQL + caching
+		   │  ├─ path_utils.py                            # helpers (.cache paths)
+		   │  └─ requirements.txt                         # backend deps
+		   ├─ public/
+		   ├─ next.config.mjs
+		   └─ package.json                                # Next 15, React 19
+		```
 
----
+		## Requirements
 
-## Running locally
+		- Node.js LTS (18+ recommended) for the Next.js app
+		- Python 3.11+ for the FastAPI backend
+		- Poppler (for pdf2image) if you want OCR fallback on PDFs
+		  - macOS: `brew install poppler`
+		  - Linux: `apt-get install poppler-utils`
+		  - Windows: install Poppler and add to PATH
+		- Google Cloud Vision (optional but recommended for OCR)
+		  - Set `GOOGLE_APPLICATION_CREDENTIALS` to your service account JSON
+		- GitHub token (optional) to improve GitHub API limits and include private/affiliated repos
 
-1) Backend (FastAPI)
-- Create and activate a Python 3.11+ virtual environment
-- Install requirements
-- Set GEMINI_API_KEY (or GOOGLE_API_KEY) in `teamskills/.env.local`
-- Start FastAPI server (e.g., uvicorn)
+		## Environment variables
 
-2) Frontend (Next.js)
-- Install dependencies with your preferred package manager
-- Run the Next.js dev server
+		Create `teamskills/.env.local` and set:
 
-Optional: open http://localhost:3000 in your browser.
+		- Frontend/Backend shared
+		  - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) – required for google.generativeai
+		  - `NEXT_PUBLIC_BACKEND_URL` – FastAPI base URL for proxies (e.g. `http://localhost:8000`)
+		- Backend only (read by FastAPI and scrapers)
+		  - `GITHUB_TOKEN` – optional, increases GitHub rate limits and repo coverage
+		  - `GITHUB_CACHE_TTL` – optional, seconds for GitHub readme cache (default 3600)
+		  - `TOP_N` – optional, number of top repos to consider in summaries
+		  - `GOOGLE_APPLICATION_CREDENTIALS` – optional path to Vision service account JSON
 
-### Example minimal steps (macOS, zsh)
+		Example `teamskills/.env.local`:
 
-```bash
-# Backend
-cd teamskills/backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-# Ensure teamskills/.env.local has GEMINI_API_KEY
-uvicorn app:app --reload --port 8000
+		```
+		GEMINI_API_KEY=sk-...your-key...
+		NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+		GITHUB_TOKEN=ghp_...optional...
+		GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/your-project-credentials.json
+		```
 
-# Frontend (new terminal)
-cd teamskills
-npm install
-npm run dev
-```
+		## Run locally
 
-Frontend runs on http://localhost:3000 and proxies API calls to the FastAPI server endpoints you configure.
+		1) Backend (FastAPI)
 
----
+		- Create and activate a venv
+		- Install dependencies
+		- Start uvicorn
 
-## Troubleshooting
+		Example (macOS, zsh):
 
-- No matches or bars look identical
-	- Increase topK in Phase 3 or adjust softmax_temperature in the backend match call.
-	- Consider enabling domain_boost for clearer separation across domains.
-- Gemini key issues
-	- Ensure GEMINI_API_KEY (or GOOGLE_API_KEY) is present in teamskills/.env.local.
-	- Restart the backend after changing environment variables.
-- Resume cache not cleared
-	- The cleanup route removes `.cache/resumes` under the Next.js working dir; verify permissions and path.
-- Proceed buttons disabled
-	- If you edit planning or team inputs, downstream proceeds are disabled until you re-generate/re-process.
+		```bash
+		cd teamskills/backend
+		python3 -m venv .venv && source .venv/bin/activate
+		pip install -r requirements.txt
+		uvicorn app:app --reload --port 8000
+		```
 
----
+		2) Frontend (Next.js)
 
-## Notes and next steps
-- Add a small UI control in Phase 3 to toggle domain_boost and tune its strength.
-- Persist topK and softmax settings per run for reproducibility.
-- Add tests around role matching weights and domain anchors.
+		- Install and run
+
+		```bash
+		cd teamskills
+		npm install
+		npm run dev
+		```
+
+		Open http://localhost:3000.
+
+		## Usage walkthrough
+
+		1) Planning (Phase 1)
+		   - Describe your idea in the chat. When ready, click the provided confirmation button or type exactly:
+		     - “Yes, I am ready to start delegating tasks.”
+		   - This triggers spec extraction (title, summary, objectives, features, etc.).
+
+		2) Team Input (Phase 2)
+		   - Add teammates (name required), optionally a GitHub username, and upload a resume (PDF or image).
+		   - On submit: resumes are cached locally, roles are derived for your team size, skills are extracted from resume + GitHub.
+
+		3) Overview (Phase 3)
+		   - Review the generated roles and each member’s languages/skills/keywords.
+		   - Set Top‑K to limit strongest items per category used for matching.
+
+		4) Matching (Phase 4)
+		   - View role→person assignments with candidate bars (softmax‑enhanced on top of cosine).
+		   - Winner’s top‑K inputs are shown for transparency.
+
+		## API reference (summary)
+
+		Frontend (Next.js) routes
+
+		- POST `/api/chat` → { messages } → { content }
+		- POST `/api/upload-resume` (form‑data: file, memberId, name) → { absPath, relPath, filename }
+		- POST `/api/cleanup-resumes` → { success, deleted }
+		- POST `/api/extract-specifications` → proxy to FastAPI `/api/extract-specifications`
+		- POST `/api/extract-roles` → proxy to FastAPI `/api/extract-roles`
+		- POST `/api/process-team-data` → proxy to FastAPI `/api/extract-skills`
+		- POST `/api/match-roles` → proxy to FastAPI `/api/match-roles`
+
+		Backend (FastAPI) routes
+
+		- POST `/api/extract-specifications` → { success, data: specObject }
+		- POST `/api/extract-roles` { specifications, memberCount } → { success, data: { roles: [...] } }
+		- POST `/api/extract-skills` { members: [{ name, githubUsername, resumePath }], ... } → { success, data: { processed_members: [...] } }
+		- POST `/api/match-roles` { roles, members, topK? } → { success, data: { assignments, similarity_matrix, reports, debug } }
+
+		Notes
+
+		- Matching uses role core_skills only for embeddings. Member text emphasizes skills/languages over keywords via weighting.
+		- Domain boost (role_matcher.py) can be tuned via `DEFAULT_DOMAIN_ANCHORS`, `strength`, and `temperature`.
+
+		## Troubleshooting
+
+		- “GEMINI_API_KEY not configured”
+		  - Ensure `teamskills/.env.local` has `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) and restart backend.
+		- OCR is weak or empty on PDFs
+		  - Install Poppler and set Vision credentials for OCR fallback.
+		- GitHub data seems sparse
+		  - Add `GITHUB_TOKEN` to lift rate limits and include private/affiliated repos when permitted.
+		- Proceed buttons disabled
+		  - Editing planning/team inputs marks data as “dirty”; re‑generate/re‑process before proceeding.
+		- Resume cache persisted
+		  - Frontend calls `/api/cleanup-resumes` after successful processing. You can call it manually if needed.
+
+		## Testing
+
+		There are basic tests for scrapers and extraction logic in `teamskills/backend/`. To run them:
+
+		```bash
+		cd teamskills/backend
+		python3 -m venv .venv && source .venv/bin/activate
+		pip install -r requirements.txt pytest
+		pytest -q
+		```
+
+		## License
+
+		No license file was provided. If you intend to open‑source this project, consider adding a license.
