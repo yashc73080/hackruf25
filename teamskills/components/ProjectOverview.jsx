@@ -4,7 +4,7 @@ import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ArrowLeft } from 'lucide-react';
+// Removed ArrowLeft icon to mirror Phase 2 button style (uses text arrow)
 
 // Helper to render an array as a list
 function List({ title, items }) {
@@ -173,6 +173,23 @@ export default function ProjectOverview({ specifications, roles = [], members = 
 
   return (
   <div className="w-full mx-auto max-w-full sm:max-w-3xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl space-y-6">
+      {/* Phase 3 header actions (match Phase 2 style) */}
+      <div className="w-full mx-auto max-w-full sm:max-w-3xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl mb-3 flex items-center justify-between">
+        <div>
+          {typeof onBackToTeam === 'function' && (
+            <Button type="button" variant="outline" onClick={onBackToTeam}>
+              ← Back to Team Input
+            </Button>
+          )}
+        </div>
+        <div>
+          {typeof onProceedToMatch === 'function' && (
+            <Button type="button" onClick={onProceedToMatch} disabled={!canProceed}>
+              Proceed to Role Matching
+            </Button>
+          )}
+        </div>
+      </div>
       {/* Project Idea */}
   <Card className="shadow-xl">
         <CardHeader className="pb-1">
@@ -184,15 +201,6 @@ export default function ProjectOverview({ specifications, roles = [], members = 
                 </>
               ) : ''}
             </CardTitle>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={onBackToTeam} disabled={!onBackToTeam} className="gap-2">
-                <ArrowLeft className="h-4 w-4" />
-                Back
-              </Button>
-              <Button onClick={onProceedToMatch} disabled={!canProceed}>
-                Proceed
-              </Button>
-            </div>
           </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-3">
