@@ -48,36 +48,54 @@ export default function TeamInputForm({ finalSpecifications }) {
 
     setIsSubmitting(true);
 
-    // Prepare data for backend processing
-    const dataToSend = {
-      specifications: finalSpecifications, // The extracted specifications from chat
-      teamMembers: teamMembers
-    };
-
-    console.log('=== FINAL TEAM MEMBERS DATA ===');
-    console.log('Number of team members:', teamMembers.length);
-    teamMembers.forEach((member, index) => {
-      console.log(`Team Member ${index + 1}:`, {
-        id: member.id,
-        name: member.name,
-        githubUsername: member.githubUsername,
-        resumeFileName: member.resumeFile ? member.resumeFile.name : 'No file',
-        resumeFileSize: member.resumeFile ? member.resumeFile.size : 0
+    try {
+      // Create FormData to handle file uploads
+      const formData = new FormData();
+      
+      // Add specifications
+      formData.append('specifications', JSON.stringify(finalSpecifications));
+      formData.append('teamMembersCount', teamMembers.length.toString());
+      
+      // Add each team member's data
+      teamMembers.forEach((member, index) => {
+        formData.append(`member_${index}_id`, member.id.toString());
+        formData.append(`member_${index}_name`, member.name);
+        formData.append(`member_${index}_githubUsername`, member.githubUsername || '');
+        
+        if (member.resumeFile) {
+          formData.append(`member_${index}_resumeFile`, member.resumeFile);
+        }
       });
-    });
-    console.log('Complete data ready for backend processing:', dataToSend);
 
-    // TODO: Send dataToSend to backend API route
-    // 1. Send all team member data (names, usernames, and resume files) 
-    //    along with the project specifications
-    //    to a Next.js API route (e.g., /api/process-team-data).
-    // 2. The API route handles the heavy lifting (GitHub API calls, OCR, vectorization).
-    // 3. Handle the response (success/failure) and move to the next UI state.
+      console.log('=== SENDING TEAM DATA TO API ===');
+      console.log('Number of team members:', teamMembers.length);
+      
+      // Send to API route
+      const response = await fetch('/api/process-team-data', {
+        method: 'POST',
+        body: formData, // Don't set Content-Type header - let browser set it for FormData
+      });
 
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 3000)); 
-    
-    setIsSubmitting(false);
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        console.log('✅ Team data processed successfully:', result.data);
+        // TODO: Move to next phase or show success message
+        alert('Team data processed successfully! Ready for matching.');
+      } else {
+        throw new Error(result.error || 'Unknown error occurred');
+      }
+      
+    } catch (error) {
+      console.error('❌ Error submitting team data:', error);
+      alert(`Error processing team data: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
