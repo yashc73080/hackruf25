@@ -40,16 +40,15 @@ export default function TeamInputForm({ onDonePlanning }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Simple validation: at least one member, all must have a GitHub username.
-    const isValid = teamMembers.length > 0 && teamMembers.every(m => m.githubUsername.trim());
+    // Updated validation: at least one member, all must have a resume file
+    const isValid = teamMembers.length > 0 && teamMembers.every(m => m.resumeFile);
     if (!isValid) {
-        alert('Please ensure all team members have a GitHub username.');
+        alert('Please ensure all team members have uploaded a resume.');
         return;
     }
 
     setIsSubmitting(true);
 
-    // TODO: 
     // 1. Send all team member data (usernames, and resume files) 
     //    to a Next.js API route (e.g., /api/process-team-data).
     // 2. The API route handles the heavy lifting (GitHub API calls, OCR, vectorization).
@@ -93,22 +92,21 @@ export default function TeamInputForm({ onDonePlanning }) {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* GitHub Username Input */}
+                {/* GitHub Username Input - now optional */}
                 <div className="space-y-2">
-                  <Label htmlFor={`github-${member.id}`}>GitHub Username <span className="text-red-500">*</span></Label>
+                  <Label htmlFor={`github-${member.id}`}>GitHub Username (Optional)</Label>
                   <Input
                     id={`github-${member.id}`}
                     type="text"
                     placeholder="e.g., octocat"
                     value={member.githubUsername}
                     onChange={(e) => updateMember(member.id, 'githubUsername', e.target.value)}
-                    required
                   />
                 </div>
 
-                {/* Resume Upload Input */}
+                {/* Resume Upload Input - now mandatory */}
                 <div className="space-y-2">
-                  <Label htmlFor={`resume-${member.id}`}>Resume/CV (PDF preferred)</Label>
+                  <Label htmlFor={`resume-${member.id}`}>Resume/CV <span className="text-red-500">*</span></Label>
                   <div className="flex items-center space-x-2">
                     <Input
                       id={`resume-${member.id}`}
@@ -116,6 +114,7 @@ export default function TeamInputForm({ onDonePlanning }) {
                       accept=".pdf"
                       onChange={(e) => updateMember(member.id, 'resumeFile', e.target.files[0])}
                       className="flex-grow file:text-sm file:font-medium file:mr-4 file:py-1 file:px-2 file:rounded-full file:border-0 file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+                      required
                     />
                     {member.resumeFile && (
                         <div className="text-sm text-green-600 flex items-center">

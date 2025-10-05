@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 
+const PROMPT_THRESHOLD = 5; // Initial model message (1) + 2 back-and-forth exchanges (2 user, 2 model) = 5 messages total.
+
 const initialMessages = [
   { 
     id: 1, 
@@ -20,9 +22,15 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
+  // Check if the user has already confirmed to move on
+  const hasConfirmedDelegation = messages.some(
+    (msg) => msg.role === 'user' && msg.content.toLowerCase().trim() === 'yes'
+  );
+  
   const sendMessage = async (e) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    // Disable sending if loading or already confirmed
+    if (!input.trim() || isLoading || hasConfirmedDelegation) return;
 
     const userMessageContent = input.trim();
     const newMessage = { id: Date.now(), role: 'user', content: userMessageContent };
@@ -90,18 +98,17 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // The chat should prompt after 2 messages of back and forth (1 initial model + 1 user + 1 model = 3 messages total).
-  const isPromptTime = messages.length === 3 && messages[messages.length - 1].role === 'model';
+  // Determine if it's the exact moment to display the bot's prompt message (after the 2nd exchange)
+  const showPromptMessage = messages.length === PROMPT_THRESHOLD && messages[messages.length - 1].role === 'model';
   
-  // Check if the user has already confirmed, to prevent the button from reappearing
-  const isDelegating = messages.some(
-    (msg) => msg.role === 'user' && msg.content.toLowerCase().trim() === 'yes'
-  );
+  // Determine if the "Yes" button should be displayed
+  // It should be displayed if:
+  // 1. The conversation has reached or passed the threshold (i.e., we've prompted at least once).
+  // 2. The user has NOT yet sent the "Yes" confirmation message.
+  const showYesButton = messages.length >= PROMPT_THRESHOLD && !hasConfirmedDelegation;
 
-  const showPromptButton = isPromptTime && !isDelegating;
-  
   // Conditionally create a temporary message object for display when it's time to prompt
-  const displayPromptMessage = showPromptButton ? { 
+  const displayPromptMessage = showPromptMessage ? { 
     id: 9999, 
     role: 'model', 
     content: 'Are you ready to start delegating tasks?',
@@ -133,7 +140,7 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
           </div>
         ))}
         
-        {/* Temporary Prompt Message */}
+        {/* Temporary Prompt Message, shown once at the threshold */}
         {displayPromptMessage && (
             <div
                 key={displayPromptMessage.id}
@@ -152,8 +159,9 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
 
       {/* Input and Action Buttons */}
       <CardFooter className="flex flex-col border-t p-4 space-y-3">
-        {showPromptButton && (
+        {showYesButton && (
           <Button 
+            type="button" // Important to prevent form submission
             className="w-full" 
             onClick={() => setInput('Yes')} // Autofill the input box with "Yes"
             disabled={isLoading}
@@ -167,10 +175,10 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
             placeholder="What kind of project are you building?..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={isLoading}
+            disabled={isLoading || hasConfirmedDelegation}
             className="flex-grow"
           />
-          <Button type="submit" disabled={isLoading} size="icon">
+          <Button type="submit" disabled={isLoading || hasConfirmedDelegation} size="icon">
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
         </form>

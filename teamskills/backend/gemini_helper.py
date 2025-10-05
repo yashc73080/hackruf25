@@ -141,7 +141,7 @@ def extract_skills_from_text(text: str, source: str = "resume", domain_priority:
         try:
             # Use the modern genai.chat.create; response shapes vary between lib versions
             resp = genai.chat.create(
-                model="gemini-1.0",
+                model="gemini-2.5-flash-lite",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_output_tokens=512,
