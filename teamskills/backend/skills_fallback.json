@@ -1,0 +1,44 @@
+{
+  "programming_languages": [
+    "python", "java", "javascript", "typescript", "c++", "c#", "c", "go", "rust", "kotlin", "swift", "ruby", "php", "scala", "haskell", "matlab", "r", "dart"
+  ],
+  "frameworks_libraries": [
+    "react", "angular", "vue", "svelte", "nextjs", "nuxt", "express", "fastapi", "flask", "django", "spring", "rails", "laravel", "asp.net", "spring-boot", "electron"
+  ],
+  "frontend": [
+    "html", "css", "sass", "scss", "tailwind", "bootstrap", "material-ui", "chakra-ui"
+  ],
+  "mobile": [
+    "react-native", "flutter", "ios", "android", "swiftui", "jetpack-compose"
+  ],
+  "data_science_ml": [
+    "machine learning", "deep learning", "pytorch", "tensorflow", "scikit-learn", "xgboost", "lightgbm", "keras", "pandas", "numpy", "sklearn", "nlp", "computer vision", "cv"
+  ],
+  "databases": [
+    "postgres", "postgresql", "mysql", "sqlite", "mongodb", "redis", "cassandra", "dynamodb", "oracle", "mssql"
+  ],
+  "devops_cloud": [
+    "docker", "kubernetes", "helm", "aws", "azure", "gcp", "terraform", "ansible", "jenkins", "github actions", "ci/cd", "serverless"
+  ],
+  "infrastructure": [
+    "linux", "bash", "shell", "system design", "networking", "load balancing", "nginx", "apache"
+  ],
+  "testing_quality": [
+    "pytest", "jest", "mocha", "cypress", "selenium", "unittest", "integration testing", "unit testing"
+  ],
+  "dataviz_product": [
+    "d3", "plotly", "matplotlib", "seaborn", "tableau", "powerbi", "figma", "ui/ux", "product management"
+  ],
+  "ml_ops": [
+    "mlops", "kubeflow", "metaflow", "mlflow", "seldon"
+  ],
+  "security": [
+    "crypto", "security", "oauth", "jwt", "ssl", "vulnerability", "pen testing"
+  ],
+  "research_medicine": [
+    "clinical", "medicine", "biology", "neuroscience", "genomics", "bioinformatics", "clinical trials"
+  ],
+  "business_skills": [
+    "product", "marketing", "sales", "analytics", "growth", "strategy", "leadership", "project management"
+  ]
+}

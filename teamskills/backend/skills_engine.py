@@ -1,44 +1,70 @@
+import json
 import math
+import os
 from typing import List, Dict, Tuple
 
 # Very small deterministic skills extractor + simple embedding (bag-of-words)
 # This is a lightweight, hackathon-friendly module that turns a list of keywords
 # into a sparse vector and computes cosine similarity.
 
-# A tiny curated keyword list for demonstration. Extend as needed.
-KEYWORDS = [
-    "python",
-    "javascript",
-    "react",
-    "nextjs",
-    "fastapi",
-    "flask",
-    "docker",
-    "ml",
-    "pytorch",
-    "tensorflow",
-    "sql",
-    "postgres",
-    "mongodb",
-    "html",
-    "css",
-    "typescript",
-]
+# Load fallback skills from JSON file (curated list). This is used as a
+# prioritized set of known skills, but extractor will still pick up unknown
+# tokens as fallback skills.
+HERE = os.path.dirname(__file__)
+FALLBACK_PATH = os.path.join(HERE, "skills_fallback.json")
+try:
+    with open(FALLBACK_PATH, "r", encoding="utf-8") as f:
+        FALLBACK = json.load(f)
+except Exception:
+    FALLBACK = {}
+
+# Flatten fallback into a single prioritized keywords list
+KEYWORDS = []
+for cat, items in FALLBACK.items():
+    for it in items:
+        k = it.lower()
+        if k not in KEYWORDS:
+            KEYWORDS.append(k)
 
 KEY_INDEX = {k: i for i, k in enumerate(KEYWORDS)}
 
 
 def extract_keywords_from_text(text: str) -> List[str]:
-    """Very simple keyword extractor: lowercase, split, and match KEYWORDS.
-    Returns list of matched keywords (no weights)."""
+    """Extract keywords by matching fallback list first, then also
+    collect other word-like tokens as fallback skills. Returns a list where
+    listed keywords come first and unknown tokens are included under
+    'extra:<token>'."""
     if not text:
         return []
     s = text.lower()
-    found = set()
-    for k in KEYWORDS:
-        if k in s:
-            found.add(k)
-    return sorted(found)
+    found = []
+    used = set()
+    # match known keywords (longer first to prefer multiword matches)
+    known_sorted = sorted(KEYWORDS, key=lambda x: -len(x))
+    for k in known_sorted:
+        if k in s and k not in used:
+            found.append(k)
+            used.add(k)
+
+    # fallback: simple tokenization to find other words that look like skills
+    # (alphanumeric + dash/underscore), exclude common stop words
+    import re
+    tokens = re.findall(r"[a-zA-Z0-9_\-\+#\.]{2,}", s)
+    stop = set(["the", "and", "for", "with", "that", "this", "from", "using", "use", "project"])
+    for t in tokens:
+        t = t.strip().lower()
+        if t in used or t in stop:
+            continue
+        # if token is already a known keyword (e.g., 'sql' vs 'postgres'), skip
+        if t in KEY_INDEX:
+            continue
+        # record as an extra skill token
+        tag = f"extra:{t}"
+        if tag not in used:
+            found.append(tag)
+            used.add(tag)
+
+    return found
 
 
 def vectorize_keywords(keywords: List[str]) -> List[float]:
