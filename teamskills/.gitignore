@@ -43,3 +43,12 @@ next-env.d.ts
 
 *.pdf
 
+*.json
+*.png
+*.jpg
+*.jpeg
+*.txt
+
+teamskills-474117-5ac11a782ba3.json
+.vscode/* 
+*.env
