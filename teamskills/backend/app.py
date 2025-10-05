@@ -1,4 +1,3 @@
-# app.py
 import os, sys, json, uuid, re, tempfile, subprocess
 from typing import List, Optional
 import traceback
@@ -8,7 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi import Body
-
+    
 # --- Imports for Role Matching ---
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -16,23 +15,25 @@ from dotenv import load_dotenv
 
 # ---------------- import skill extractor ----------------
 try:
-    # Prefer package-relative import
-    from .skill_extractor import analyze_profile
-except Exception:
+    # Try absolute import first
+    from skill_extractor import analyze_profile
+except ImportError:
     try:
-        # Fallback to absolute if executed differently
-        from skill_extractor import analyze_profile
-    except Exception as e:
+        # Try relative import if running as part of a package
+        from .skill_extractor import analyze_profile
+    except ImportError as e:
         print(f"Warning: Could not import skill_extractor: {e}")
         analyze_profile = None
 
 # Specifications & Roles extraction
 try:
-    from .planning_extractor import extract_specifications_from_chat, extract_roles_for_project
-except Exception:
+    # Try absolute import first
+    from planning_extractor import extract_specifications_from_chat, extract_roles_for_project
+except ImportError:
     try:
-        from planning_extractor import extract_specifications_from_chat, extract_roles_for_project
-    except Exception as e:
+        # Try relative import if running as part of a package
+        from .planning_extractor import extract_specifications_from_chat, extract_roles_for_project
+    except ImportError as e:
         print(f"Warning: Could not import planning_extractor: {e}")
         extract_specifications_from_chat = None
         extract_roles_for_project = None
@@ -46,7 +47,18 @@ if os.path.exists(env_local_path):
     load_dotenv(env_local_path)
 
 import google.generativeai as genai
-from .role_matcher import match_roles
+
+# Role matcher import
+try:
+    # Try absolute import first
+    from role_matcher import match_roles
+except ImportError:
+    try:
+        # Try relative import if running as part of a package
+        from .role_matcher import match_roles
+    except ImportError as e:
+        print(f"Warning: Could not import role_matcher: {e}")
+        match_roles = None
 
 # --- Configure Gemini client ---
 # Configure Gemini client safely

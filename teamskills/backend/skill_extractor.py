@@ -1,12 +1,51 @@
 import json
 import os
+import sys
 import tempfile
 from typing import List, Dict, Optional, Union
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-from .github_scraper import summarize_user
-from .resume_scraper import extract_with_pdfplumber, extract_with_gcv
+# Handle imports - try relative first, then absolute
+try:
+    from .github_scraper import summarize_user
+    from .resume_scraper import extract_with_pdfplumber, extract_with_gcv
+except ImportError:
+    # If relative imports fail, try absolute imports or add parent to path
+    parent_dir = os.path.dirname(os.path.dirname(__file__))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    
+    try:
+        from backend.github_scraper import summarize_user
+        from backend.resume_scraper import extract_with_pdfplumber, extract_with_gcv
+    except ImportError:
+        # If still failing, import only what we need for testing
+        print("⚠️ Warning: Could not import github_scraper and resume_scraper modules")
+        print("⚠️ This is normal when running the test function directly")
+        
+        # Define minimal fallback functions for testing
+        def extract_with_pdfplumber(file_path):
+            try:
+                import pdfplumber
+                text = ""
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+                return text.strip()
+            except Exception as e:
+                print(f"❌ PDFPlumber error: {e}")
+                return ""
+        
+        def extract_with_gcv(file_path):
+            print("❌ Google Cloud Vision not available in fallback mode")
+            return ""
+        
+        def summarize_user(username, max_repos=5):
+            print("❌ GitHub scraper not available in fallback mode")
+            return []
 
 # Load environment variables - check multiple locations
 load_dotenv()  # Default behavior
@@ -18,13 +57,16 @@ if os.path.exists(env_local_path):
 
 # Configure Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+print(f"🔑 GEMINI_API_KEY found: {'Yes' if GEMINI_API_KEY else 'No'}")
 if GEMINI_API_KEY:
+    print(f"🔑 API Key length: {len(GEMINI_API_KEY)}")
     try:
         configure_fn = getattr(genai, "configure", None)
         if callable(configure_fn):
             configure_fn(api_key=GEMINI_API_KEY)
-    except Exception as _e:
-        print(f"Warning: failed to configure Gemini: {_e}")
+            print("✅ Gemini API configured successfully")
+    except Exception as e:
+        print(f"❌ Warning: failed to configure Gemini: {e}")
 
 def extract_text_from_file(file_path: str, threshold: int = 500) -> str:
     """
@@ -37,6 +79,8 @@ def extract_text_from_file(file_path: str, threshold: int = 500) -> str:
     Returns:
         Extracted text content
     """
+    print(f"📄 Extracting text from: {file_path}")
+    
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
     
@@ -45,77 +89,41 @@ def extract_text_from_file(file_path: str, threshold: int = 500) -> str:
     
     try:
         if ext == ".pdf":
+            print("📄 Trying pdfplumber extraction...")
             # Try pdfplumber first
             extracted = extract_with_pdfplumber(file_path)
+            print(f"📄 PDFPlumber extracted {len(extracted)} characters")
             
             # Fall back to Vision OCR if text is too short
             if len(extracted) < threshold:
+                print(f"📄 Text too short ({len(extracted)} < {threshold}), trying Vision OCR...")
                 gcv_text = extract_with_gcv(file_path)
+                print(f"📄 Vision OCR extracted {len(gcv_text)} characters")
                 if len(gcv_text) > len(extracted):
                     extracted = gcv_text
+                    print("📄 Using Vision OCR result")
         else:
+            print("📄 Using Vision OCR for image file...")
             # For images, use Vision OCR directly
             extracted = extract_with_gcv(file_path)
+            print(f"📄 Vision OCR extracted {len(extracted)} characters")
             
     except Exception as e:
+        print(f"❌ Error in primary extraction: {e}")
         # Last resort: try Vision OCR
         try:
+            print("📄 Trying Vision OCR as fallback...")
             extracted = extract_with_gcv(file_path)
+            print(f"📄 Fallback Vision OCR extracted {len(extracted)} characters")
         except Exception as e2:
+            print(f"❌ Vision fallback also failed: {e2}")
             raise RuntimeError(f"Failed to extract text: {e}. Vision fallback error: {e2}")
     
-    return extracted
-
-def get_github_readmes(username: str, max_repos: int = 5) -> List[Dict]:
-    """
-    Get README content from top GitHub repositories for a user.
+    print(f"📄 Final extracted text length: {len(extracted)} characters")
+    if len(extracted) > 0:
+        print(f"📄 First 200 chars: {extracted[:200]}...")
     
-    Args:
-        username: GitHub username
-        max_repos: Maximum number of repositories to analyze
-        
-    Returns:
-        List of dictionaries containing repo info and README snippets
-    """
-    try:
-        print(f"Fetching GitHub data for user: {username}")
-        summary = summarize_user(username)
-        print(f"GitHub summary keys: {list(summary.keys()) if summary else 'None'}")
-        
-        if not summary:
-            print("No summary returned from GitHub scraper")
-            return []
-        
-        # Check if user was found (the github_scraper might return an error structure)
-        if "error" in summary or summary.get("username") != username:
-            print(f"User not found or error in summary: {summary}")
-            return []
-        
-        # Get top repos with README content
-        repos_with_readmes = []
-        repos = summary.get("top_repos", [])
-        print(f"Found {len(repos)} top repos")
-        
-        for i, repo in enumerate(repos[:max_repos]):
-            print(f"Processing repo {i+1}: {repo.get('repo')} - README present: {bool(repo.get('readme_snippet'))}")
-            if repo.get("readme_snippet"):
-                repos_with_readmes.append({
-                    "repo_name": repo.get("repo"),
-                    "owner": repo.get("owner"),
-                    "description": repo.get("description", ""),
-                    "primary_language": repo.get("primary_language"),
-                    "stars": repo.get("stars", 0),
-                    "readme_snippet": repo.get("readme_snippet")
-                })
-        
-        print(f"Collected {len(repos_with_readmes)} repos with READMEs")
-        return repos_with_readmes
-        
-    except Exception as e:
-        print(f"Error fetching GitHub data for {username}: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+    return extracted
 
 def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -> Dict:
     """
@@ -131,7 +139,7 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY not found in environment variables")
     
-    print(f"Analyzing {len(text_content)} characters of {content_type} content with Gemini")
+    print(f"🤖 Analyzing {len(text_content)} characters of {content_type} content with Gemini")
     
     # Create prompt based on content type
     if content_type == "resume":
@@ -143,9 +151,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         4. Certifications and qualifications
         5. Key experience highlights
         
-    Order each array with the strongest/most defining skills first and weaker/less identifiable ones later. Use evidence like frequency, recency, emphasis, and role impact when ranking.
+        Order each array with the strongest/most defining skills first and weaker/less identifiable ones later. Use evidence like frequency, recency, emphasis, and role impact when ranking.
 
-    Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
+        Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
         - technical_skills: array of technical skills
         - soft_skills: array of soft skills
         - domains: array of industry domains/areas
@@ -163,9 +171,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         4. Development tools and methodologies
         5. Technical concepts and keywords
         
-    Order each array with the strongest/most defining items first and weaker/less identifiable ones later. Use evidence like prominence in the README, code emphasis, and repo stars when ranking.
+        Order each array with the strongest/most defining items first and weaker/less identifiable ones later. Use evidence like prominence in the README, code emphasis, and repo stars when ranking.
 
-    Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
+        Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
         - languages: array of programming languages
         - frameworks: array of frameworks and libraries
         - tools: array of development tools
@@ -183,9 +191,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         4. Certifications and qualifications
         5. Key experience and project highlights
         
-    Order each array with the strongest/most defining items first and weaker/less identifiable ones later. Use frequency, recency, prominence, and cross-source corroboration when ranking.
+        Order each array with the strongest/most defining items first and weaker/less identifiable ones later. Use frequency, recency, prominence, and cross-source corroboration when ranking.
 
-    Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
+        Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
         - technical_skills: array of all technical skills
         - soft_skills: array of soft skills
         - domains: array of domains and areas
@@ -196,20 +204,29 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         """
     
     try:
+        print("🤖 Creating Gemini model...")
         ModelCtor = getattr(genai, "GenerativeModel", None)
         if not callable(ModelCtor):
             raise RuntimeError("google.generativeai.GenerativeModel not available")
         model = ModelCtor('gemini-2.5-flash-lite')
+        print("🤖 Model created successfully")
+        
         gen_fn = getattr(model, "generate_content", None)
         if not callable(gen_fn):
             raise RuntimeError("generate_content not available on GenerativeModel instance")
+        
+        print("🤖 Sending request to Gemini...")
         response = gen_fn(prompt + text_content)
+        print("🤖 Received response from Gemini")
         
         # Try to parse JSON response
         response_text = getattr(response, "text", None)
         if not isinstance(response_text, str):
             response_text = str(response)
         response_text = response_text.strip()
+        
+        print(f"🤖 Raw response length: {len(response_text)} characters")
+        print(f"🤖 First 500 chars of response: {response_text[:500]}...")
         
         # Clean up the response if it's wrapped in markdown code blocks
         if response_text.startswith("```json"):
@@ -219,12 +236,24 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         if response_text.endswith("```"):
             response_text = response_text[:-3]
         
+        print(f"🤖 Cleaned response length: {len(response_text)} characters")
+        
         try:
             result = json.loads(response_text.strip())
-            print(f"Successfully parsed Gemini response for {content_type}")
+            print(f"✅ Successfully parsed Gemini response for {content_type}")
+            print(f"✅ Response keys: {list(result.keys())}")
+            
+            # Log array lengths for debugging
+            for key, value in result.items():
+                if isinstance(value, list):
+                    print(f"✅ {key}: {len(value)} items")
+                    if len(value) > 0:
+                        print(f"   First few: {value[:3]}")
+            
             return result
-        except json.JSONDecodeError:
-            print(f"Failed to parse JSON from Gemini response for {content_type}")
+        except json.JSONDecodeError as e:
+            print(f"❌ Failed to parse JSON from Gemini response for {content_type}: {e}")
+            print(f"❌ Problematic text: {response_text[:1000]}...")
             # If JSON parsing fails, return a structured fallback
             return {
                 "raw_response": response_text,
@@ -236,7 +265,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
             }
             
     except Exception as e:
-        print(f"Error calling Gemini API for {content_type}: {e}")
+        print(f"❌ Error calling Gemini API for {content_type}: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "error": str(e),
             "extraction_status": "failed",
@@ -245,6 +276,14 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
             "domains": [],
             "keywords": []
         }
+
+def get_github_readmes(username: str, max_repos: int = 5) -> List[Dict]:
+    """Wrapper function for GitHub scraping"""
+    try:
+        return summarize_user(username, max_repos)
+    except Exception as e:
+        print(f"❌ GitHub scraping failed: {e}")
+        return []
 
 def analyze_profile(github_username: Optional[str] = None, 
                    resume_path: Optional[str] = None,
@@ -323,6 +362,30 @@ def analyze_profile(github_username: Optional[str] = None,
     print(f"Analysis complete. Sources used: {results['sources_used']}")
     return results
 
+def test_extraction(resume_path: str):
+    """Test function to debug extraction issues"""
+    print("🧪 Starting extraction test...")
+    
+    try:
+        # Test text extraction
+        text = extract_text_from_file(resume_path)
+        print(f"✅ Text extraction successful: {len(text)} characters")
+        
+        if len(text) < 50:
+            print("⚠️ Warning: Very short text extracted. May indicate extraction issues.")
+            return
+        
+        # Test Gemini skills extraction
+        skills = extract_skills_with_gemini(text, "resume")
+        print(f"✅ Skills extraction result: {skills}")
+        
+        return skills
+        
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
+
 # CLI interface
 def main():
     import argparse
@@ -357,4 +420,11 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    exit(main())
+    # Test mode - run extraction test on a specific file
+    test_path = r"C:\Yash Dev\hackruf25\teamskills\.cache\resumes\Yash_Chennawar_1759673702499.pdf"
+    if os.path.exists(test_path):
+        test_extraction(test_path)
+    else:
+        print(f"Test file not found: {test_path}")
+        print("You can also run the CLI with:")
+        print("python skill_extractor.py --resume path/to/resume.pdf")
