@@ -12,9 +12,14 @@ const PHASES = {
 
 export default function Home() {
   const [currentPhase, setCurrentPhase] = useState(PHASES.PLANNING);
+  // NEW: State to store the final project specifications (chat history)
+  const [finalSpecifications, setFinalSpecifications] = useState(null);
   
   // This function is passed to the chat component to advance the project.
-  const handleDonePlanning = () => {
+  // MODIFIED: It now accepts the chat history (specifications)
+  const handleDonePlanning = (specifications) => {
+    setFinalSpecifications(specifications);
+    console.log("Final Specifications Saved:", specifications); // Console log for verification
     setCurrentPhase(PHASES.TEAM_INPUT);
   };
 
@@ -30,16 +35,14 @@ export default function Home() {
       </header>
 
       {currentPhase === PHASES.PLANNING && (
+        // MODIFIED: Pass the updated callback function
         <ProjectPlanningChat onDonePlanning={handleDonePlanning} />
       )}
       
       {currentPhase === PHASES.TEAM_INPUT && (
-        <TeamInputForm /* onProcessData={...} */ />
+        // NEW/MODIFIED: Pass the specifications down so TeamInputForm can send it with team data later
+        <TeamInputForm finalSpecifications={finalSpecifications} /* onProcessData={...} */ />
       )}
-
-      <footer className="mt-12 text-center text-sm text-muted-foreground">
-        Powered by Gemini & Next.js
-      </footer>
     </div>
   );
 }

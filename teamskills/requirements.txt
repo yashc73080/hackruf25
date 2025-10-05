@@ -2,7 +2,13 @@ requests
 python-dotenv
 pdfplumber
 python-dateutil
-# optional
+# optional (useful for image OCR and Vision fallback)
+# Local OCR (Tesseract): uncomment if you have system tesseract installed
 # pytesseract
-# pdf2image
+# PDF -> image conversion (needed by Vision OCR flow)
+pdf2image
+# Image handling
+pillow
+# Google Cloud Vision client (optional; requires service account credentials)
+google-cloud-vision
  

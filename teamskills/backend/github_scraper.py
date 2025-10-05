@@ -19,7 +19,8 @@ REST_HEADERS = {"Authorization": f"token {TOKEN}"} if TOKEN else {}
 GQL_HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 
 # Small on-disk cache for development to avoid excessive GitHub calls
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+CACHE_DIR = os.path.join(repo_root, ".cache", "github")
 os.makedirs(CACHE_DIR, exist_ok=True)
 TOP_N = int(os.getenv("TOP_N", "5"))
 CACHE_TTL = int(os.getenv("GITHUB_CACHE_TTL", "3600"))

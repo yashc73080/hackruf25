@@ -10,19 +10,18 @@ import { Trash2, UserPlus, Upload, Loader2, Check } from 'lucide-react';
 // Initial structure for a team member
 const initialMember = {
   id: Date.now(),
+  name: '',
   githubUsername: '',
   resumeFile: null,
 };
 
-export default function TeamInputForm({ onDonePlanning }) {
+export default function TeamInputForm({ finalSpecifications }) {
   const [teamMembers, setTeamMembers] = useState([initialMember]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const addMember = () => {
-    setTeamMembers(prev => [
-      ...prev,
-      { ...initialMember, id: Date.now() },
-    ]);
+    const newMember = { ...initialMember, id: Date.now() };
+    setTeamMembers(prev => [...prev, newMember]);
   };
 
   const removeMember = (id) => {
@@ -40,32 +39,64 @@ export default function TeamInputForm({ onDonePlanning }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Updated validation: at least one member, all must have a resume file
-    const isValid = teamMembers.length > 0 && teamMembers.every(m => m.resumeFile);
+    // Updated validation: at least one member, all must have a name and resume file
+    const isValid = teamMembers.length > 0 && teamMembers.every(m => m.name.trim() && m.resumeFile);
     if (!isValid) {
-        alert('Please ensure all team members have uploaded a resume.');
+        alert('Please ensure all team members have a name and uploaded resume.');
         return;
     }
 
     setIsSubmitting(true);
 
-    // 1. Send all team member data (usernames, and resume files) 
-    //    to a Next.js API route (e.g., /api/process-team-data).
-    // 2. The API route handles the heavy lifting (GitHub API calls, OCR, vectorization).
-    // 3. Handle the response (success/failure) and move to the next UI state.
-    
-    console.log('Submitting Data:', teamMembers);
+    try {
+      // Create FormData to handle file uploads
+      const formData = new FormData();
+      
+      // Add specifications
+      formData.append('specifications', JSON.stringify(finalSpecifications));
+      formData.append('teamMembersCount', teamMembers.length.toString());
+      
+      // Add each team member's data
+      teamMembers.forEach((member, index) => {
+        formData.append(`member_${index}_id`, member.id.toString());
+        formData.append(`member_${index}_name`, member.name);
+        formData.append(`member_${index}_githubUsername`, member.githubUsername || '');
+        
+        if (member.resumeFile) {
+          formData.append(`member_${index}_resumeFile`, member.resumeFile);
+        }
+      });
 
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 3000)); 
-    
-    // After successful submission, you would typically call a function 
-    // to advance the UI to the "Matching & Task Delegation Phase" (Step 5).
-    // For now, we'll just log success and reset the button state.
-    setIsSubmitting(false);
-    // onDonePlanning({ success: true }); // Call this to advance the state in the parent component
+      console.log('=== SENDING TEAM DATA TO API ===');
+      console.log('Number of team members:', teamMembers.length);
+      
+      // Send to API route
+      const response = await fetch('/api/process-team-data', {
+        method: 'POST',
+        body: formData, // Don't set Content-Type header - let browser set it for FormData
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        console.log('✅ Team data processed successfully:', result.data);
+        // TODO: Move to next phase or show success message
+        alert('Team data processed successfully! Ready for matching.');
+      } else {
+        throw new Error(result.error || 'Unknown error occurred');
+      }
+      
+    } catch (error) {
+      console.error('❌ Error submitting team data:', error);
+      alert(`Error processing team data: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
-
 
   return (
     <Card className="w-full max-w-4xl mx-auto shadow-xl">
@@ -74,7 +105,7 @@ export default function TeamInputForm({ onDonePlanning }) {
           Team Input: Skills & Experience
         </CardTitle>
         <CardDescription>
-          Enter your teammates' GitHub profiles and upload their resumes to build their skill vectors.
+          Enter your teammates' information and upload their resumes to build their skill vectors.
         </CardDescription>
       </CardHeader>
       
@@ -91,8 +122,21 @@ export default function TeamInputForm({ onDonePlanning }) {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* GitHub Username Input - now optional */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Name Input */}
+                <div className="space-y-2">
+                  <Label htmlFor={`name-${member.id}`}>Full Name <span className="text-red-500">*</span></Label>
+                  <Input
+                    id={`name-${member.id}`}
+                    type="text"
+                    placeholder="e.g., John Doe"
+                    value={member.name}
+                    onChange={(e) => updateMember(member.id, 'name', e.target.value)}
+                    required
+                  />
+                </div>
+
+                {/* GitHub Username Input */}
                 <div className="space-y-2">
                   <Label htmlFor={`github-${member.id}`}>GitHub Username (Optional)</Label>
                   <Input
