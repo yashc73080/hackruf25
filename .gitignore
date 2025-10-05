@@ -55,7 +55,7 @@ __pycache__/
 .cache/
 teamskills/uploads/
 
-# Secrets (do NOT commit service account JSONs)
+## Secrets (do NOT commit service account JSONs)
 teamskills/teamskills-474117-5ac11a782ba3.json
 
 # Additional common ignores
@@ -80,4 +80,3 @@ npm-debug.log*
 
 # Next.js build output (ensure not tracked)
 /.next/
-
