@@ -1,0 +1,1 @@
+{"readme": "# Frantry\n\n```bash\ncd Frantry\nnpm install\nnpx expo start\n```\n\n```bash\ncd backend\nnpm install\nnpm run dev\n```"}

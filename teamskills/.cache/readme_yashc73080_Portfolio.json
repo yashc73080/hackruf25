@@ -1,0 +1,1 @@
+{"readme": "# Yash Chennawar Portfolio\n\nRun locally like this:\n```bash\nnpm install\nnpm run dev\n```\n\n```bash\ncd backend\npip install -r requirements.txt\npython app.py\n```"}

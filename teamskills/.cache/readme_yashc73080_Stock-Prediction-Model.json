@@ -1,0 +1,1 @@
+{"readme": "# Stock-Prediction-Model\n\nPredicts S&P 500 closing value by using Random Forest Classifier model. \n\nLibraries used: yfinance, scikit-learn, and pandas. \n"}
