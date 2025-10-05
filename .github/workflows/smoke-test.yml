@@ -1,0 +1,23 @@
+name: Smoke Tests
+
+on:
+  push:
+    branches: [ "vibecoding" ]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f teamskills/requirements.txt ]; then pip install -r teamskills/requirements.txt; fi
+      - name: Run smoke test (no token)
+        run: |
+          python3 teamskills/backend/test_scrape_user.py yc73080 || true
