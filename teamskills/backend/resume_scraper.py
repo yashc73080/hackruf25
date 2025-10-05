@@ -27,6 +27,7 @@ from typing import List
 import statistics
 from collections import defaultdict
 from typing import Optional
+from .path_utils import cache_dir, teamskills_root
 
 
 # --- Optional imports guarded at use-time ---
@@ -261,14 +262,9 @@ def main():
 
     # Write a simple plaintext report (.txt) preserving extracted spacing
     try:
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        cache_reports = os.path.join(repo_root, ".cache", "resumes")
-        os.makedirs(cache_reports, exist_ok=True)
-        # if out_path is inside teamskills/backend, prefer writing into cache_reports
-        if os.path.commonpath([os.path.abspath(out_path), repo_root]) == repo_root and str(out_path).startswith(os.path.join(repo_root, "teamskills")):
-            target_out = os.path.join(cache_reports, os.path.basename(out_path))
-        else:
-            target_out = out_path
+        # Always write reports under teamskills/.cache/resumes
+        cache_reports = str(cache_dir("resumes"))
+        target_out = os.path.join(cache_reports, os.path.basename(out_path))
 
         # ensure .txt extension
         if target_out.endswith(".md") or target_out.endswith(".txt"):
@@ -288,11 +284,10 @@ def main():
         print(f"ERROR: Could not write output file: {out_path} ({e})", file=sys.stderr)
         sys.exit(1)
 
-    # Save original upload for traceability in .cache/resumes
+    # Save original upload for traceability in teamskills/.cache/resumes
     try:
-        # Save uploads at the repository root in `.cache/resumes`
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        uploads_dir = os.path.join(repo_root, ".cache", "resumes")
+        # Save uploads at teamskills root in `.cache/resumes`
+        uploads_dir = str(cache_dir("resumes"))
         os.makedirs(uploads_dir, exist_ok=True)
         base = os.path.basename(in_path)
         dst = os.path.join(uploads_dir, base)

@@ -8,7 +8,7 @@ Behavior:
  - If a basename is provided and it exists under repo-root `.uploads/`, that file is used.
  - Otherwise the provided path is used as-is (absolute or relative to repo root).
  - The tester invokes the scraper via the same Python interpreter (keeps venv).
- - Output report is created at repo-root `.cache/resumes/<stem>.report.txt` and a short preview is printed.
+ - Output report is created at `teamskills/.cache/resumes/<stem>.report.txt` and a short preview is printed.
 
 Examples (copy & paste into your terminal):
 
@@ -28,9 +28,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-UPLOADS_DIR = REPO_ROOT / ".uploads"
-CACHE_RESUMES = REPO_ROOT / ".cache" / "resumes"
+TEAMSKILLS_ROOT = Path(__file__).resolve().parents[1]
+UPLOADS_DIR = TEAMSKILLS_ROOT / ".uploads"
+CACHE_RESUMES = TEAMSKILLS_ROOT / ".cache" / "resumes"
 SCRAPER_MODULE = "teamskills.backend.resume_scraper"
 
 
