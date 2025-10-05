@@ -2,7 +2,7 @@
 import os, sys, json, uuid, re, tempfile, subprocess
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -150,6 +150,146 @@ app.add_middleware(
 
 # serve uploaded PDFs
 app.mount("/resumes", StaticFiles(directory=UPLOAD_DIR), name="resumes")
+
+@app.post("/api/process-team-data")
+async def process_team_data(
+    specifications: str = Form(...),
+    teamMembersCount: int = Form(...),
+    **form_data
+):
+    """
+    Process team data from TeamInputForm.jsx
+    Expects: specifications, teamMembersCount, and member_X_* fields
+    """
+    print("=" * 50)
+    print("🚀 RECEIVED DATA AT /api/process-team-data")
+    print("=" * 50)
+    
+    print(f"📊 Team Members Count: {teamMembersCount}")
+    print(f"📝 Specifications (raw): {specifications}")
+    
+    print("\n📦 ALL FORM DATA RECEIVED:")
+    for key, value in form_data.items():
+        if hasattr(value, 'filename'):
+            print(f"  {key}: [FILE] {value.filename} ({value.content_type})")
+        else:
+            print(f"  {key}: {value}")
+    
+    print("\n🔍 PARSED TEAM MEMBERS:")
+    for i in range(teamMembersCount):
+        print(f"\n  Member {i}:")
+        name = form_data.get(f'member_{i}_name')
+        github = form_data.get(f'member_{i}_githubUsername', '')
+        resume = form_data.get(f'member_{i}_resumeFile')
+        
+        print(f"    Name: '{name}'")
+        print(f"    GitHub: '{github}'")
+        if resume and hasattr(resume, 'filename'):
+            print(f"    Resume: {resume.filename} ({resume.content_type}, {getattr(resume, 'size', 'unknown size')})")
+        else:
+            print(f"    Resume: {resume}")
+    
+    try:
+        specs = json.loads(specifications)
+        print(f"\n📋 Parsed Specifications: {json.dumps(specs, indent=2)}")
+    except Exception as e:
+        print(f"\n❌ Failed to parse specifications: {e}")
+        specs = {}
+    
+    print("=" * 50)
+    
+    # Rest of your existing processing logic...
+    try:
+        # Extract team members from form data
+        processed_members = []
+        db = load_db()
+        
+        for i in range(teamMembersCount):
+            print(f"\n--- Processing Member {i+1} ---")
+            
+            # Extract member data from form
+            member_name = form_data.get(f'member_{i}_name')
+            member_github = form_data.get(f'member_{i}_githubUsername', '')
+            member_resume = form_data.get(f'member_{i}_resumeFile')
+            
+            print(f"Name: {member_name}")
+            print(f"GitHub: {member_github}")
+            print(f"Resume file: {getattr(member_resume, 'filename', 'None') if member_resume else 'None'}")
+            
+            if not member_name:
+                print("Skipping member - no name provided")
+                continue
+                
+            # Find or create member
+            members = db["members"]
+            m = find_by_name(members, member_name)
+            if not m:
+                print("Creating new member")
+                m = {
+                    "member_id": str(uuid.uuid4()),
+                    "name": member_name.strip(),
+                    "github_url": f"https://github.com/{member_github}" if member_github else None,
+                    "resume_path": None,
+                    "skills": [],
+                    "keywords": [],
+                    "languages": []
+                }
+                members.append(m)
+            else:
+                print("Updating existing member")
+                if member_github:
+                    m["github_url"] = f"https://github.com/{member_github}"
+
+            # Save resume file if provided
+            if member_resume and hasattr(member_resume, 'read'):
+                ext = os.path.splitext(getattr(member_resume, 'filename', 'resume.pdf'))[1] or ".pdf"
+                dest = os.path.join(UPLOAD_DIR, f"{m['member_id']}{ext}")
+                
+                print(f"Saving resume to: {dest}")
+                # Read file content
+                content = await member_resume.read()
+                with open(dest, "wb") as f:
+                    f.write(content)
+                m["resume_path"] = dest
+
+            # Run scrapers
+            print("Running GitHub scraper...")
+            gh_res = run_github_scraper(m.get("github_url"))
+            print(f"GitHub results: {gh_res}")
+            
+            print("Running resume scraper...")
+            cv_res = run_resume_scraper_via_cli(m.get("resume_path"))
+            print(f"Resume results: {cv_res}")
+
+            # Merge + dedupe
+            m["languages"] = norm_list((m.get("languages") or []) + (gh_res.get("languages") or []) + (cv_res.get("languages") or []))
+            m["skills"]     = norm_list((m.get("skills") or []) + (gh_res.get("skills") or []) + (cv_res.get("skills") or []))
+            m["keywords"]   = norm_list((m.get("keywords") or []) + (gh_res.get("keywords") or []) + (cv_res.get("keywords") or []))
+
+            print(f"Final member data: {m}")
+            processed_members.append(m)
+
+        # Save updated database
+        save_db(db)
+        print(f"\n✅ SAVED {len(processed_members)} MEMBERS TO DB")
+
+        return {
+            "success": True,
+            "data": {
+                "specifications": specs,
+                "processed_members": processed_members,
+                "total_members": len(processed_members)
+            }
+        }
+
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)}, 
+            status_code=500
+        )
 
 @app.post("/member")
 async def create_or_update_member(
