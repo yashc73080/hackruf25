@@ -44,6 +44,13 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
         setMessages(newMessages);
         setInput('');
         
+        // Extract the second-to-last message which should contain the specifications
+        // This is the last model message before the temporary prompt
+        const modelMessages = messages.filter(msg => msg.role === 'model');
+        const specificationsMessage = modelMessages[modelMessages.length - 1]; // Last model message contains specs
+        
+        console.log('Extracted specifications:', specificationsMessage);
+        
         // Add a final confirmation message from the bot before transitioning
         const confirmationMessage = {
             id: Date.now() + 1,
@@ -53,8 +60,8 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
         
         setMessages(prev => [...prev, confirmationMessage]);
 
-        // Delay the transition slightly to allow UI to update
-        setTimeout(onDonePlanning, 500); 
+        // Pass the specifications to the parent component
+        setTimeout(() => onDonePlanning(specificationsMessage), 500); 
         return;
     }
     
