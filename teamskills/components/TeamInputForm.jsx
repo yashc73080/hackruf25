@@ -14,7 +14,7 @@ const initialMember = {
   resumeFile: null,
 };
 
-export default function TeamInputForm({ onDonePlanning }) {
+export default function TeamInputForm({ finalSpecifications }) {
   const [teamMembers, setTeamMembers] = useState([initialMember]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -49,23 +49,26 @@ export default function TeamInputForm({ onDonePlanning }) {
 
     setIsSubmitting(true);
 
+    // Prepare data for backend processing
+    const dataToSend = {
+      specifications: finalSpecifications, // The extracted specifications from chat
+      teamMembers: teamMembers
+    };
+
+    console.log('Data ready for backend processing:', dataToSend);
+
+    // TODO: Send dataToSend to backend API route
     // 1. Send all team member data (usernames, and resume files) 
+    //    along with the project specifications
     //    to a Next.js API route (e.g., /api/process-team-data).
     // 2. The API route handles the heavy lifting (GitHub API calls, OCR, vectorization).
     // 3. Handle the response (success/failure) and move to the next UI state.
-    
-    console.log('Submitting Data:', teamMembers);
 
     // Simulate API call delay
     await new Promise(resolve => setTimeout(resolve, 3000)); 
     
-    // After successful submission, you would typically call a function 
-    // to advance the UI to the "Matching & Task Delegation Phase" (Step 5).
-    // For now, we'll just log success and reset the button state.
     setIsSubmitting(false);
-    // onDonePlanning({ success: true }); // Call this to advance the state in the parent component
   };
-
 
   return (
     <Card className="w-full max-w-4xl mx-auto shadow-xl">
@@ -92,7 +95,7 @@ export default function TeamInputForm({ onDonePlanning }) {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* GitHub Username Input - now optional */}
+                {/* GitHub Username Input */}
                 <div className="space-y-2">
                   <Label htmlFor={`github-${member.id}`}>GitHub Username (Optional)</Label>
                   <Input
