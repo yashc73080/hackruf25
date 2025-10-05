@@ -18,6 +18,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f teamskills/requirements.txt ]; then pip install -r teamskills/requirements.txt; fi
-      - name: Run smoke test (no token)
+          pip install pytest
+      - name: Run pytest smoke tests
+        env:
+          # use the built-in GITHUB_TOKEN if tests require private access later
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pytest -q teamskills/backend/test_smoke_scraper.py
+      - name: Fallback: run simple runner
         run: |
           python3 teamskills/backend/test_scrape_user.py yc73080 || true
