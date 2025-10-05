@@ -164,7 +164,7 @@ function MemberCard({ member, index }) {
   );
 }
 
-export default function ProjectOverview({ specifications, roles = [], members = [], onBackToTeam, onProceedToMatch, topK = 10, onTopKChange }) {
+export default function ProjectOverview({ specifications, roles = [], members = [], onBackToTeam, onProceedToMatch, topK = 10, onTopKChange, canProceed = false }) {
   const ideaTitle = (specifications && (specifications.idea_title || specifications.title)) || null;
   const ideaSummary = (specifications && (specifications.idea_summary || specifications.summary)) || null;
 
@@ -173,23 +173,27 @@ export default function ProjectOverview({ specifications, roles = [], members = 
 
   return (
   <div className="w-full mx-auto max-w-full sm:max-w-3xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl space-y-6">
-      {/* Top bar with Back button */}
-      <div className="flex items-center justify-between">
-        <Button variant="outline" onClick={onBackToTeam} disabled={!onBackToTeam} className="gap-2">
-          <ArrowLeft className="h-4 w-4" />
-          Back to Team Input
-        </Button>
-      </div>
       {/* Project Idea */}
   <Card className="shadow-xl">
         <CardHeader className="pb-1">
-          <CardTitle className="text-2xl font-bold">
-            Project Idea{ideaTitle ? (
-              <>
-                : <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{` ${ideaTitle}`}</span>
-              </>
-            ) : ''}
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-2xl font-bold">
+              Project Idea{ideaTitle ? (
+                <>
+                  : <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{` ${ideaTitle}`}</span>
+                </>
+              ) : ''}
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={onBackToTeam} disabled={!onBackToTeam} className="gap-2">
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+              <Button onClick={onProceedToMatch} disabled={!canProceed}>
+                Proceed
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-3">
           {ideaSummary && (
@@ -235,7 +239,7 @@ export default function ProjectOverview({ specifications, roles = [], members = 
                 Uses strongest top-K from skills, languages, and keywords; skills and languages are weighted higher than keywords.
               </span>
             </div>
-            <Button onClick={onProceedToMatch} disabled={!onProceedToMatch} className="sm:flex-none w-full sm:w-auto">
+            <Button onClick={onProceedToMatch} disabled={!canProceed} className="sm:flex-none w-full sm:w-auto">
               Match roles to members
             </Button>
           </div>

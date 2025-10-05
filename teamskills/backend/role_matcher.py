@@ -36,40 +36,154 @@ def _default_get_embedding(text: str) -> np.ndarray:
     )
     return np.array(response["embedding"], dtype=np.float32)
 
+# ---------------------- Domain-aware adjustments ----------------------
+
+# Default domain anchors describe common domains with rich seed phrases.
+DEFAULT_DOMAIN_ANCHORS: dict[str, str] = {
+    "frontend": (
+        "frontend web development; UI; UX; React; Next.js; JavaScript; TypeScript; HTML; CSS; Tailwind; accessibility; design systems"
+    ),
+    "backend": (
+        "backend server development; APIs; microservices; databases; PostgreSQL; MySQL; Redis; Node.js; Python; Java; Go; REST; GraphQL; scalability; reliability"
+    ),
+    "data-ml": (
+        "data science; machine learning; deep learning; statistics; pandas; numpy; scikit-learn; TensorFlow; PyTorch; data pipelines; feature engineering; MLOps"
+    ),
+    "devops": (
+        "DevOps; CI/CD; Docker; Kubernetes; Terraform; Infrastructure as Code; AWS; Azure; GCP; observability; logging; monitoring; SRE"
+    ),
+    "mobile": (
+        "mobile development; iOS; Android; Swift; Kotlin; React Native; Flutter; mobile UI; app store; device APIs"
+    ),
+    "security": (
+        "cybersecurity; application security; encryption; IAM; vulnerability; pentesting; threat modeling; OWASP; zero trust"
+    ),
+    "product-design": (
+        "product management; product discovery; UX research; UI design; interaction design; prototyping; Figma; user testing"
+    ),
+    "finance": (
+        "finance; accounting; financial markets; trading; investment banking; quant; derivatives; portfolio; risk management; fintech; payments"
+    ),
+    "healthcare": (
+        "healthcare; medical; clinical; EHR; patient care; HIPAA; biomed; pharma; diagnostics; public health"
+    ),
+    "education": (
+        "education; edtech; pedagogy; teaching; curriculum; learning science; assessment; LMS"
+    ),
+}
+
+def _softmax(x: np.ndarray, temperature: float = 1.0, axis: int = -1) -> np.ndarray:
+    """Numerically stable softmax with temperature.
+    If temperature < 1, sharpening; > 1, smoothing.
+    """
+    if temperature <= 0:
+        temperature = 1.0
+    x_scaled = x / float(temperature)
+    x_max = np.max(x_scaled, axis=axis, keepdims=True)
+    e_x = np.exp(x_scaled - x_max)
+    sum_e = np.sum(e_x, axis=axis, keepdims=True)
+    return e_x / np.clip(sum_e, 1e-9, None)
+
+def _build_domain_anchor_embeddings(embed_fn, anchors: dict[str, str] | None = None):
+    """Create embeddings for domain anchors. Returns (names, embeddings[np.ndarray])."""
+    anchors = anchors or DEFAULT_DOMAIN_ANCHORS
+    names = list(anchors.keys())
+    texts = [anchors[n] for n in names]
+    embs = np.vstack([embed_fn(t) for t in texts])
+    return names, embs
+
+def _domain_alignment_matrix(
+    role_embs: np.ndarray,
+    member_embs: np.ndarray,
+    anchor_names: list[str],
+    anchor_embs: np.ndarray,
+    temperature: float = 0.7,
+    method: str = "dot",
+) -> tuple[np.ndarray, dict]:
+    """Compute a role×member matrix of domain alignment based on similarities to anchor domains.
+    - role_embs: (R, d)
+    - member_embs: (M, d)
+    - anchor_embs: (D, d)
+    Returns (alignment[R,M] in [0,1], debug_info)
+    """
+    # Similarity of roles/members to each anchor
+    role_vs_anchor = cosine_similarity(role_embs, anchor_embs)  # (R, D)
+    member_vs_anchor = cosine_similarity(member_embs, anchor_embs)  # (M, D)
+
+    # Convert to distributions over domains for each role/member (sharpen a bit)
+    role_dist = _softmax(role_vs_anchor, temperature=temperature, axis=1)  # (R, D)
+    member_dist = _softmax(member_vs_anchor, temperature=temperature, axis=1)  # (M, D)
+
+    # Compute alignment scores
+    if method == "cosine":
+        # Normalize distributions to unit length then cosine between them
+        def _norm(x):
+            n = np.linalg.norm(x, axis=1, keepdims=True)
+            return x / np.clip(n, 1e-9, None)
+        r_n = _norm(role_dist)
+        m_n = _norm(member_dist)
+        align = r_n @ m_n.T  # (R, M) in [0,1]
+    else:
+        # Default: dot-product of probability vectors (expected overlap), in [0,1]
+        align = role_dist @ member_dist.T
+
+    # Prepare compact debug info
+    debug = {
+        "anchors": anchor_names,
+        "roles": [
+            {
+                "top": anchor_names[int(np.argmax(role_vs_anchor[i]))],
+                "scores": role_vs_anchor[i].tolist(),
+            }
+            for i in range(role_vs_anchor.shape[0])
+        ],
+        "members": [
+            {
+                "name_index": j,
+                "top": anchor_names[int(np.argmax(member_vs_anchor[j]))],
+                "scores": member_vs_anchor[j].tolist(),
+            }
+            for j in range(member_vs_anchor.shape[0])
+        ],
+    }
+    return align, debug
+
 def _normalize_roles(roles_input):
-    """Accepts roles as list[dict] with title/description/fields or dict[str,str]; returns dict[name->text]."""
-    if isinstance(roles_input, dict):
-        return {str(k): str(v) for k, v in roles_input.items()}
+    """Normalize roles to a mapping of name->text restricted to core_skills only.
+    Returns (roles_map, roles_debug) where roles_debug lists core_skills used and the final text.
+    """
     out = {}
+    debug = []
+    if isinstance(roles_input, dict):
+        for k, v in (roles_input or {}).items():
+            name = str(k)
+            core = []
+            if isinstance(v, dict):
+                core = v.get("core_skills") or v.get("skills") or []
+            text = ("Core skills: " + ", ".join(core) + ".") if core else ""
+            out[name] = text
+            debug.append({"role": name, "core_skills": list(core), "text": text})
+        return out, debug
     for i, r in enumerate(roles_input or []):
         if isinstance(r, dict):
             name = r.get("title") or r.get("name") or f"Role {i+1}"
-            # Prefer concatenation of meaningful fields
-            parts = []
-            purp = r.get("purpose") or r.get("description") or ""
-            if purp:
-                parts.append(f"Purpose: {purp}.")
-            resp = r.get("responsibilities") or []
-            if resp:
-                parts.append("Responsibilities: " + ", ".join(resp) + ".")
             core = r.get("core_skills") or r.get("skills") or []
-            if core:
-                parts.append("Core skills: " + ", ".join(core) + ".")
-            nice = r.get("nice_to_have") or []
-            if nice:
-                parts.append("Nice to have: " + ", ".join(nice) + ".")
-            text = " ".join([p for p in parts if p])
-            out[str(name)] = text.strip() or name
+            text = ("Core skills: " + ", ".join(core) + ".") if core else ""
+            out[str(name)] = text
+            debug.append({"role": str(name), "core_skills": list(core), "text": text})
         else:
-            out[f"Role {i+1}"] = str(r)
-    return out
+            role_name = f"Role {i+1}"
+            out[role_name] = ""
+            debug.append({"role": role_name, "core_skills": [], "text": ""})
+    return out, debug
 
 def _normalize_members(members_input, top_k: int | None = None, weights: dict | None = None):
     """Accepts members as list[dict] with name and arrays (skills, languages, keywords).
-    Returns (names, texts). If top_k is set, only the first top_k items in each array are used (assuming strongest-first ordering).
-    Weights can emphasize categories, e.g., {"skills": 2.0, "languages": 2.0, "keywords": 1.0}.
+    Returns (names, texts, debug_members). If top_k is set, only the first top_k items in each array are used (assuming strongest-first ordering).
+    Weights can emphasize categories, e.g., {"skills": 2.0, "languages": 2.0, "keywords": 1.0}. debug_members captures exact arrays and text used.
     """
     names, texts = [], []
+    debug_members = []
     weights = weights or {"skills": 2.0, "languages": 2.0, "keywords": 1.0}
     for m in members_input or []:
         if not isinstance(m, dict):
@@ -80,10 +194,12 @@ def _normalize_members(members_input, top_k: int | None = None, weights: dict | 
         languages = m.get("languages") or m.get("programming_languages") or []
         keywords = m.get("keywords") or m.get("notable_keywords") or []
         # Take strongest-first subset if requested
+        selected_top_k = None
         if isinstance(top_k, int) and top_k > 0:
             skills = list(skills)[:top_k]
             languages = list(languages)[:top_k]
             keywords = list(keywords)[:top_k]
+            selected_top_k = top_k
         # Flatten to a single string for embedding; add light templating for context
         def _flatten(seq):
             bag = []
@@ -109,19 +225,44 @@ def _normalize_members(members_input, top_k: int | None = None, weights: dict | 
             keys_line = f"Keywords: {keys_txt}."
             parts.extend([keys_line] * max(1, int(round(weights.get("keywords", 1.0)))))
         text = " ".join(parts).strip()
+
+        # Thorough logging of what is being sent for embedding
+        try:
+            k_label = selected_top_k if selected_top_k is not None else "ALL"
+            print(f"[role_matcher] Member '{name}' embedding inputs (top_k={k_label}):")
+            print(f"  skills   ({len(skills)}): {skills}")
+            print(f"  languages({len(languages)}): {languages}")
+            print(f"  keywords ({len(keywords)}): {keywords}")
+            preview = (text[:300] + '...') if len(text) > 300 else text
+            print(f"  text_for_embedding[{len(text)}]: {preview}")
+        except Exception:
+            pass
         names.append(str(name))
         texts.append(text)
-    return names, texts
+        # Collect debug info for frontend logging
+        debug_members.append({
+            "name": str(name),
+            "top_k_used": selected_top_k,
+            "skills": list(skills),
+            "languages": list(languages),
+            "keywords": list(keywords),
+            "text": text,
+        })
+    return names, texts, debug_members
 
-def _softmax(x: np.ndarray, temperature: float = 0.6) -> np.ndarray:
-    # Numerically stable softmax with temperature
-    x_scaled = x / max(temperature, 1e-6)
-    x_shift = x_scaled - np.max(x_scaled)
-    e = np.exp(x_shift)
-    s = e.sum() or 1.0
-    return e / s
+"""
+Softmax removed: we rely on raw cosine and a normalized share percent only.
+"""
 
-def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights: dict | None = None):
+def match_roles(
+    roles,
+    members,
+    embed_fn=None,
+    top_k: int | None = None,
+    weights: dict | None = None,
+    domain_boost: dict | None = None,
+    softmax_temperature: float | None = 0.6,
+):
     """
     Compute role→member assignment using embeddings and cosine similarity.
 
@@ -147,11 +288,11 @@ def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights
         _configure_genai()
         embed_fn = _default_get_embedding
 
-    roles_map = _normalize_roles(roles)
+    roles_map, roles_debug = _normalize_roles(roles)
     role_names = list(roles_map.keys())
     role_texts = list(roles_map.values())
 
-    member_names, member_texts = _normalize_members(members, top_k=top_k, weights=weights)
+    member_names, member_texts, member_debug = _normalize_members(members, top_k=top_k, weights=weights)
 
     if not role_names or not member_names:
         return {"assignments": {}, "similarity_matrix": [], "reports": []}
@@ -159,33 +300,57 @@ def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights
     role_embeddings = np.vstack([embed_fn(t) for t in role_texts])
     member_embeddings = np.vstack([embed_fn(t) for t in member_texts])
 
+    # Base cosine similarity
     sim_matrix = cosine_similarity(role_embeddings, member_embeddings)
+
+    # Optional: amplify domain (mis)match using anchor-based alignment
+    domain_debug = None
+    cfg = domain_boost or {}
+    enabled = cfg.get("enabled", True)
+    strength = float(cfg.get("strength", 0.35))  # 0..1, where 0=no effect
+    if enabled and strength > 0:
+        anchors = cfg.get("anchors")
+        temperature = float(cfg.get("temperature", 0.7))
+        method = str(cfg.get("method", "dot"))  # 'dot' or 'cosine'
+        anchor_names, anchor_embs = _build_domain_anchor_embeddings(embed_fn, anchors=anchors)
+        align_matrix, align_debug = _domain_alignment_matrix(
+            role_embeddings, member_embeddings, anchor_names, anchor_embs, temperature=temperature, method=method
+        )
+        # Scale similarities: boost when aligned, reduce when misaligned
+        # Map alignment [0,1] -> scale [1-strength, 1+strength]
+        scale = 1.0 + strength * (2.0 * align_matrix - 1.0)
+        sim_matrix = sim_matrix * scale
+        domain_debug = {
+            "strength": strength,
+            "temperature": temperature,
+            "method": method,
+            "alignment_preview": {
+                "min": float(np.min(align_matrix)),
+                "max": float(np.max(align_matrix)),
+                "mean": float(np.mean(align_matrix)),
+            },
+            **align_debug,
+        }
 
     assignments = {}
     reports = []
     remaining = set(range(len(member_names)))
     for i, role in enumerate(role_names):
         sims = sim_matrix[i, :]
+        # Compute softmax-enhanced scores for display (amplify differences)
+        soft_scores = _softmax(np.array(sims, dtype=np.float64).reshape(1, -1), temperature=(softmax_temperature or 1.0), axis=1)[0]
         best_idx = max(remaining, key=lambda j: sims[j]) if remaining else None
         if best_idx is not None:
             assignments[role] = member_names[best_idx]
             remaining.remove(best_idx)
         # Build per-role report regardless
-        # Keep raw cosine similarities for transparency
-        # Derive two normalized views:
-        # 1) shifted-percent: share-of-positive (legacy)
-        shifted = (sims + 1.0) / 2.0
-        total = float(shifted.sum()) or 1.0
-        percents = shifted / total
-        # 2) softmax-percent with temperature for sharper separation
-        softmax_p = _softmax(sims, temperature=0.6)
+        # Keep raw cosine similarities and softmax-enhanced scores for transparency
         ranked = sorted(
             (
                 {
                     "member": member_names[j],
                     "score": float(sims[j]),
-                    "percent": float(percents[j]),
-                    "softmax_percent": float(softmax_p[j]),
+                    "soft_score": float(soft_scores[j]),
                 }
                 for j in range(len(member_names))
             ),
@@ -196,8 +361,8 @@ def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights
         if ranked:
             top = ranked[0]
             log = (
-                f"Role '{role}': cosine similarity computed vs each member embedding. "
-                f"Top: {top['member']} (cos={top['score']:.4f}, softmax={(top['softmax_percent']*100):.1f}%)."
+                f"Role '{role}': cosine similarity computed and softmax-enhanced for display. "
+                f"Top: {top['member']} (cos={top['score']:.4f}, soft={top.get('soft_score', 0.0):.4f})."
             )
         else:
             log = f"Role '{role}': no candidates available."
@@ -208,7 +373,18 @@ def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights
             "log": log,
         })
 
-    return {"assignments": assignments, "similarity_matrix": sim_matrix.tolist(), "reports": reports}
+    return {
+        "assignments": assignments,
+        "similarity_matrix": sim_matrix.tolist(),
+        "reports": reports,
+        "debug": {
+            "top_k": top_k,
+            "members": member_debug,
+            "roles": roles_debug,
+            "domain": domain_debug,
+            "softmax_temperature": softmax_temperature,
+        },
+    }
 
 __all__ = ["match_roles"]
 

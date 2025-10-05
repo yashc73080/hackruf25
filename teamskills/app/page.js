@@ -26,12 +26,14 @@ export default function Home() {
   const [teamReady, setTeamReady] = useState(false);
   const [roleAssignments, setRoleAssignments] = useState({});
   const [roleReports, setRoleReports] = useState([]);
+  const [matchDebug, setMatchDebug] = useState(null);
   const [topK, setTopK] = useState(10);
   // Phase navigation
   const goToPlanning = () => setCurrentPhase(PHASES.PLANNING);
   const goToTeamInput = () => setCurrentPhase(PHASES.TEAM_INPUT);
   const goToOverview = () => setCurrentPhase(PHASES.OVERVIEW);
   const goToMatched = () => setCurrentPhase(PHASES.MATCHED);
+  const goBackToOverview = () => setCurrentPhase(PHASES.OVERVIEW);
 
   // Planning events
   const handlePlanningMessage = () => {
@@ -62,12 +64,22 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+    const data = await res.json();
       if (!res.ok || !data?.success) throw new Error(data?.error || 'Failed to match roles');
   const assignments = data.data?.assignments || {};
   const reports = data.data?.reports || [];
+  const debug = data.data?.debug || {};
+  // Print a single JSON object with the exact inputs used for embeddings (top-k arrays per member)
+  try {
+    console.log({
+      event: 'role_matching_inputs',
+      topK,
+      debug,
+    });
+  } catch (_) {}
       setRoleAssignments(assignments);
   setRoleReports(reports);
+    setMatchDebug(debug || null);
       // Auto-advance to matched view
       setTimeout(() => {
         goToMatched();
@@ -120,7 +132,7 @@ export default function Home() {
           }}
           onDirtyChange={(dirty) => setTeamDirty(!!dirty)}
           onProceed={goToOverview}
-          canProceed={teamReady && !teamDirty}
+          canProceed={teamReady && !teamDirty && !planningDirty}
         />
       </div>
 
@@ -133,11 +145,20 @@ export default function Home() {
           onProceedToMatch={handleProceedToMatch}
           topK={topK}
           onTopKChange={setTopK}
+          canProceed={teamReady && !planningDirty && !teamDirty}
         />
       </div>
 
       <div className={currentPhase === PHASES.MATCHED ? 'w-full' : 'hidden'}>
-        <RoleMatchResults assignments={roleAssignments} roles={finalRoles} members={finalMembers} reports={roleReports} />
+        <RoleMatchResults
+          assignments={roleAssignments}
+          roles={finalRoles}
+          members={finalMembers}
+          reports={roleReports}
+          matchDebug={matchDebug}
+          topK={topK}
+          onBackToOverview={goBackToOverview}
+        />
       </div>
     </div>
   );

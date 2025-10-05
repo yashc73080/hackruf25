@@ -3,9 +3,10 @@ export async function POST() {
     const fs = (await import('fs/promises')).default;
     const path = (await import('path')).default;
 
-    // Resolve the resumes cache folder relative to the project root
-    const baseDir = process.cwd();
-    const resumesDir = path.join(baseDir, 'teamskills', '.cache', 'resumes');
+  // Resolve the resumes cache folder relative to the Next.js app working directory
+  // Upload route stores files at `${process.cwd()}/.cache/resumes`
+  const baseDir = process.cwd();
+  const resumesDir = path.join(baseDir, '.cache', 'resumes');
 
     // Attempt to read directory; if missing, treat as success
     let entries = [];
@@ -20,24 +21,11 @@ export async function POST() {
     }
 
     let deleted = 0;
-    await Promise.all(
-      entries.map(async (name) => {
-        const p = path.join(resumesDir, name);
-        try {
-          const stat = await fs.stat(p);
-          if (stat.isFile()) {
-            await fs.unlink(p);
-            deleted += 1;
-          } else if (stat.isDirectory()) {
-            // Recursively remove subfolders if any
-            await fs.rm(p, { recursive: true, force: true });
-            deleted += 1;
-          }
-        } catch (_) {
-          // Ignore failures for individual entries
-        }
-      })
-    );
+    // Remove the whole resumes directory for a clean slate
+    await fs.rm(resumesDir, { recursive: true, force: true });
+    deleted = entries.length;
+    // Recreate the directory to keep subsequent uploads working
+    await fs.mkdir(resumesDir, { recursive: true });
 
     return new Response(JSON.stringify({ success: true, deleted }), {
       status: 200,
