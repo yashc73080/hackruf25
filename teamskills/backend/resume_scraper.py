@@ -209,9 +209,9 @@ def main():
         print(f"ERROR: Could not write output file: {out_path} ({e})", file=sys.stderr)
         sys.exit(1)
 
-    # Save original upload for traceability in uploads/
+    # Save original upload for traceability in .uploads/
     try:
-        uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
+        uploads_dir = os.path.join(os.path.dirname(__file__), "..", ".uploads")
         os.makedirs(uploads_dir, exist_ok=True)
         base = os.path.basename(in_path)
         dst = os.path.join(uploads_dir, base)
