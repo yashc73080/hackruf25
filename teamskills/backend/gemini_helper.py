@@ -5,11 +5,11 @@ Simple Gemini (Google generative API) helper to extract normalized skills from t
 
 Behavior:
 - Uses environment variable GEMINI_API_KEY (or GOOGLE_API_KEY) via google.generativeai if available.
-- Provides a cache on disk under teamskills/.cache/gemini to avoid repeated calls.
+- Provides a cache on disk under repo-root .cache/gemini to avoid repeated calls.
 - Returns a dict with tokens_normalized and raw response.
 
 Dependencies (optional):
-  pip install google-generativeai
+    pip install google-generativeai
 """
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache", "gemini")
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+CACHE_DIR = os.path.join(repo_root, ".cache", "gemini")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 DEFAULT_RETRIES = 3
