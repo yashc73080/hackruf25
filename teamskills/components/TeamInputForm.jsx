@@ -85,7 +85,7 @@ export default function TeamInputForm({ finalSpecifications }) {
       if (result.success) {
         console.log('✅ Team data processed successfully:', result.data);
         // TODO: Move to next phase or show success message
-        alert('Team data processed successfully! Ready for matching.');
+        alert('Team data processed successfully! Check backend for role assignments.');
       } else {
         throw new Error(result.error || 'Unknown error occurred');
       }
