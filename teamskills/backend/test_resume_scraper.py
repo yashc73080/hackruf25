@@ -2,18 +2,30 @@
 """Small CLI tester for `teamskills.backend.resume_scraper`.
 
 Usage:
-  python -m teamskills.backend.test_resume_scraper <resume_basename_or_path>
+    python -m teamskills.backend.test_resume_scraper <resume_basename_or_path>
 
 Behavior:
  - If a basename is provided and it exists under repo-root `.uploads/`, that file is used.
  - Otherwise the provided path is used as-is (absolute or relative to repo root).
  - The tester invokes the scraper via the same Python interpreter (keeps venv).
  - Output report is created at repo-root `.cache/resumes/<stem>.report.txt` and a short preview is printed.
+
+Examples (copy & paste into your terminal):
+
+    # If you placed resumes in the repo .uploads directory, pass the basename:
+    python -m teamskills.backend.test_resume_scraper Resume___Ayush_Mishra___Fall_2025.png
+    python -m teamskills.backend.test_resume_scraper Resume___Ayush_Mishra___Fall_2025.pdf
+
 """
 import sys
 import subprocess
 from pathlib import Path
 import argparse
+
+# Ensure repo root is on sys.path when run as a script so imports resolve
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
