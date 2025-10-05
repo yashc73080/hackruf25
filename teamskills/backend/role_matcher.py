@@ -7,41 +7,34 @@ Exposes a reusable function `match_roles(roles, members, embed_fn=None)` compati
 
 import os
 import numpy as np
+import json  # Add this
+import traceback  # Add this if you want error handling
 from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 # Load env from repo root if available (for GEMINI_API_KEY)
 dotenv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 load_dotenv(dotenv_path)
 
 def _configure_genai():
-    import importlib
-    genai = importlib.import_module("google.generativeai")
+    """Configure Gemini API - simplified version like your old code"""
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError(f"GEMINI_API_KEY not found. Checked path: {dotenv_path}")
-    configure_fn = getattr(genai, "configure", None)
-    if callable(configure_fn):
-        configure_fn(api_key=api_key)
-    else:
-        raise RuntimeError("google.generativeai.configure not available")
+    
+    print(f"🔑 Found API key: {api_key[:10]}...")  # Debug output
+    genai.configure(api_key=api_key)
+    print("✅ Gemini configured successfully")  # Debug output
 
 def _default_get_embedding(text: str) -> np.ndarray:
-    """Embedding via Gemini models/embedding-001 with safe getattr calls."""
-    import importlib
-    genai = importlib.import_module("google.generativeai")
-    embed_content = getattr(genai, "embed_content", None)
-    if not callable(embed_content):
-        raise RuntimeError("google.generativeai.embed_content not available")
-    response = embed_content(
+    """Embedding via Gemini models/embedding-001 - simplified like your old code"""
+    response = genai.embed_content(
         model="models/embedding-001",
         content=text or "",
         task_type="semantic_similarity",
     )
-    emb = response.get("embedding") if isinstance(response, dict) else getattr(response, "embedding", None)
-    if emb is None:
-        raise RuntimeError("Embedding missing from Gemini response")
-    return np.array(emb, dtype=np.float32)
+    return np.array(response["embedding"], dtype=np.float32)
 
 def _normalize_roles(roles_input):
     """Accepts roles as list[dict] with title/description/fields or dict[str,str]; returns dict[name->text]."""
@@ -161,7 +154,7 @@ def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights
     member_names, member_texts = _normalize_members(members, top_k=top_k, weights=weights)
 
     if not role_names or not member_names:
-        return {"assignments": {}, "similarity_matrix": []}
+        return {"assignments": {}, "similarity_matrix": [], "reports": []}
 
     role_embeddings = np.vstack([embed_fn(t) for t in role_texts])
     member_embeddings = np.vstack([embed_fn(t) for t in member_texts])
@@ -218,3 +211,20 @@ def match_roles(roles, members, embed_fn=None, top_k: int | None = None, weights
     return {"assignments": assignments, "similarity_matrix": sim_matrix.tolist(), "reports": reports}
 
 __all__ = ["match_roles"]
+
+if __name__ == "__main__":
+    # Quick test
+    test_roles = {"frontend": "React JavaScript UI development", "backend": "Python API database"}
+    test_members = [
+        {"name": "Alice", "skills": ["React", "JavaScript"], "languages": ["JavaScript"], "keywords": ["frontend"]},
+        {"name": "Bob", "skills": ["Python", "Django"], "languages": ["Python"], "keywords": ["backend", "API"]}
+    ]
+    
+    try:
+        result = match_roles(test_roles, test_members)
+        print("✅ Test successful!")
+        print(f"Assignments: {result['assignments']}")
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
