@@ -58,3 +58,26 @@ teamskills/uploads/
 # Secrets (do NOT commit service account JSONs)
 teamskills/teamskills-474117-5ac11a782ba3.json
 
+# Additional common ignores
+.venv/
+venv/
+env/
+ENV/
+.env.local
+.env.*.local
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.serverless/
+dist/
+build/
+coverage/
+*.sqlite3
+.idea/
+.vscode/
+*.log
+npm-debug.log*
+
+# Next.js build output (ensure not tracked)
+/.next/
+
