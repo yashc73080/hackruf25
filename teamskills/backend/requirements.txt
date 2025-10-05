@@ -1,2 +1,0 @@
-# python == 3.12.7
-python_dotenv==0.21.0
