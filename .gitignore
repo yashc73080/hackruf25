@@ -52,8 +52,7 @@ __pycache__/
 *.py[cod]
 
 # Local caches and uploads
-.cache/
-/.uploads/
+/.cache/
 
 ## Secrets (do NOT commit service account JSONs)
 teamskills/teamskills-474117-5ac11a782ba3.json
