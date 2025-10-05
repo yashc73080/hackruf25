@@ -43,10 +43,6 @@ export default function Home() {
         // NEW/MODIFIED: Pass the specifications down so TeamInputForm can send it with team data later
         <TeamInputForm finalSpecifications={finalSpecifications} /* onProcessData={...} */ />
       )}
-
-      <footer className="mt-12 text-center text-sm text-muted-foreground">
-        Powered by Gemini & Next.js
-      </footer>
     </div>
   );
 }
