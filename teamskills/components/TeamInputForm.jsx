@@ -10,6 +10,7 @@ import { Trash2, UserPlus, Upload, Loader2, Check } from 'lucide-react';
 // Initial structure for a team member
 const initialMember = {
   id: Date.now(),
+  name: '',
   githubUsername: '',
   resumeFile: null,
 };
@@ -19,10 +20,8 @@ export default function TeamInputForm({ finalSpecifications }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const addMember = () => {
-    setTeamMembers(prev => [
-      ...prev,
-      { ...initialMember, id: Date.now() },
-    ]);
+    const newMember = { ...initialMember, id: Date.now() };
+    setTeamMembers(prev => [...prev, newMember]);
   };
 
   const removeMember = (id) => {
@@ -40,10 +39,10 @@ export default function TeamInputForm({ finalSpecifications }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Updated validation: at least one member, all must have a resume file
-    const isValid = teamMembers.length > 0 && teamMembers.every(m => m.resumeFile);
+    // Updated validation: at least one member, all must have a name and resume file
+    const isValid = teamMembers.length > 0 && teamMembers.every(m => m.name.trim() && m.resumeFile);
     if (!isValid) {
-        alert('Please ensure all team members have uploaded a resume.');
+        alert('Please ensure all team members have a name and uploaded resume.');
         return;
     }
 
@@ -55,10 +54,21 @@ export default function TeamInputForm({ finalSpecifications }) {
       teamMembers: teamMembers
     };
 
-    console.log('Data ready for backend processing:', dataToSend);
+    console.log('=== FINAL TEAM MEMBERS DATA ===');
+    console.log('Number of team members:', teamMembers.length);
+    teamMembers.forEach((member, index) => {
+      console.log(`Team Member ${index + 1}:`, {
+        id: member.id,
+        name: member.name,
+        githubUsername: member.githubUsername,
+        resumeFileName: member.resumeFile ? member.resumeFile.name : 'No file',
+        resumeFileSize: member.resumeFile ? member.resumeFile.size : 0
+      });
+    });
+    console.log('Complete data ready for backend processing:', dataToSend);
 
     // TODO: Send dataToSend to backend API route
-    // 1. Send all team member data (usernames, and resume files) 
+    // 1. Send all team member data (names, usernames, and resume files) 
     //    along with the project specifications
     //    to a Next.js API route (e.g., /api/process-team-data).
     // 2. The API route handles the heavy lifting (GitHub API calls, OCR, vectorization).
@@ -77,7 +87,7 @@ export default function TeamInputForm({ finalSpecifications }) {
           Team Input: Skills & Experience
         </CardTitle>
         <CardDescription>
-          Enter your teammates' GitHub profiles and upload their resumes to build their skill vectors.
+          Enter your teammates' information and upload their resumes to build their skill vectors.
         </CardDescription>
       </CardHeader>
       
@@ -94,7 +104,20 @@ export default function TeamInputForm({ finalSpecifications }) {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Name Input */}
+                <div className="space-y-2">
+                  <Label htmlFor={`name-${member.id}`}>Full Name <span className="text-red-500">*</span></Label>
+                  <Input
+                    id={`name-${member.id}`}
+                    type="text"
+                    placeholder="e.g., John Doe"
+                    value={member.name}
+                    onChange={(e) => updateMember(member.id, 'name', e.target.value)}
+                    required
+                  />
+                </div>
+
                 {/* GitHub Username Input */}
                 <div className="space-y-2">
                   <Label htmlFor={`github-${member.id}`}>GitHub Username (Optional)</Label>
