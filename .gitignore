@@ -56,5 +56,6 @@ __pycache__/
 teamskills/uploads/
 
 # Secrets (do NOT commit service account JSONs)
-teamskills/teamskills-474117-5ac11a782ba3.json
+teamskills/*.json
 
+teamskills/.next/*
