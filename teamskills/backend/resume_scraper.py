@@ -201,19 +201,29 @@ def main():
     raw = gem_resp.get("raw")
     report.append("```json\n" + json.dumps(raw if isinstance(raw, (dict, list)) else str(raw), indent=2) + "\n```")
 
-    # Write markdown report
+    # Write markdown report into .cache/resumes by default (out_path may override)
     try:
-        with open(out_path, "w", encoding="utf-8") as f:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        cache_reports = os.path.join(repo_root, ".cache", "resumes")
+        os.makedirs(cache_reports, exist_ok=True)
+        # if out_path is inside teamskills/backend, prefer writing into cache_reports
+        if os.path.commonpath([os.path.abspath(out_path), repo_root]) == repo_root and str(out_path).startswith(os.path.join(repo_root, "teamskills")):
+            target_out = os.path.join(cache_reports, os.path.basename(out_path))
+        else:
+            target_out = out_path
+        with open(target_out, "w", encoding="utf-8") as f:
             f.write("\n\n".join(report))
+        # set out_path to the actual written location for user message
+        out_path = target_out
     except Exception as e:
         print(f"ERROR: Could not write output file: {out_path} ({e})", file=sys.stderr)
         sys.exit(1)
 
-    # Save original upload for traceability in .uploads/
+    # Save original upload for traceability in .cache/resumes
     try:
-        # Save uploads at the repository root in a hidden `.uploads/` directory
+        # Save uploads at the repository root in `.cache/resumes`
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        uploads_dir = os.path.join(repo_root, ".uploads")
+        uploads_dir = os.path.join(repo_root, ".cache", "resumes")
         os.makedirs(uploads_dir, exist_ok=True)
         base = os.path.basename(in_path)
         dst = os.path.join(uploads_dir, base)
