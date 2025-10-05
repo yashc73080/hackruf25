@@ -79,3 +79,4 @@ npm-debug.log*
 
 # Next.js build output (ensure not tracked)
 teamskills/.next/
+teamskills/.cache/*
