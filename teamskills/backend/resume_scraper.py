@@ -16,6 +16,7 @@ System deps for PDF->image:
   - Poppler (required by pdf2image): choco install poppler  |  brew install poppler  |  apt-get install poppler-utils
 Env:
   - GOOGLE_APPLICATION_CREDENTIALS must point to your service account JSON for Vision.
+  $env:GOOGLE_APPLICATION_CREDENTIALS="teamskills\teamskills-474117-5ac11a782ba3.json" # or whatever it should be
 """
 
 import argparse
