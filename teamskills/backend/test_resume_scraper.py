@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Simple CLI tester for resume_scraper.py
 Usage:
-    python -m teamskills.backend.test_resume_scraper <filename>
+    python -m teamskills.backend.test_resume_scraper <filename-or-path>
+
+This tester accepts either a basename located in the repo-root `.uploads/`
+directory, or a full/relative path to a resume file. Generated reports are
+written into the repo-root cache: `.cache/resumes/<stem>.report.md`.
 """
 import sys
 import os
@@ -16,12 +20,22 @@ except Exception:
 
 def run(path: str):
     repo_root = Path(__file__).resolve().parents[2]
-    in_path = repo_root / ".uploads" / path
-    out_path = repo_root / "teamskills" / "backend" / f"{Path(path).stem}.report.md"
+
+    candidate = Path(path)
+    # If a simple basename was provided and exists under .uploads, prefer that
+    if not candidate.is_absolute() and (repo_root / ".uploads" / candidate).exists():
+        in_path = repo_root / ".uploads" / candidate
+    else:
+        in_path = (candidate if candidate.is_absolute() else repo_root / candidate)
 
     if not in_path.exists():
         print(f"ERROR: input not found: {in_path}")
         return 2
+
+    # default output into repo-root .cache/resumes
+    out_dir = repo_root / ".cache" / "resumes"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{in_path.stem}.report.md"
 
     # call resume_scraper.py as script
     cmd = (
@@ -44,6 +58,6 @@ def run(path: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python -m teamskills.backend.test_resume_scraper <filename>")
+        print("Usage: python -m teamskills.backend.test_resume_scraper <filename-or-path>")
         sys.exit(2)
     sys.exit(run(sys.argv[1]))

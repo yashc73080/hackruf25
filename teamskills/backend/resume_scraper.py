@@ -24,15 +24,7 @@ import io
 import os
 import sys
 from typing import List
-import json
 
-# local helper (Gemini)
-try:
-    from .gemini_helper import extract_skills_from_text  # type: ignore
-except Exception:
-    # Allow the module to run even if gemini_helper isn't available yet.
-    def extract_skills_from_text(text: str, source: str = "resume"):
-        return {"tokens_normalized": [], "raw": "_no_gemini_helper"}
 
 # --- Optional imports guarded at use-time ---
 def _import_pdfplumber():
@@ -182,26 +174,7 @@ def main():
     report.append("## Extracted Text (first 30k chars)\n")
     report.append("```\n" + (extracted[:30000] if extracted else "") + "\n```")
 
-    # call Gemini helper to extract skills (if available)
-    try:
-        gem_resp = extract_skills_from_text(extracted or "", source="resume")
-    except Exception as e:
-        gem_resp = {"tokens_normalized": [], "raw": f"_error:{e}"}
-
-    tokens = gem_resp.get("tokens_normalized") or []
-    report.append("## Extracted Skills\n")
-    if tokens:
-        for t in tokens:
-            report.append(f"- `{t}`")
-    else:
-        report.append("_No skills extracted._")
-
-    # include raw LLM output for debugging
-    report.append("## LLM Raw Response\n")
-    raw = gem_resp.get("raw")
-    report.append("```json\n" + json.dumps(raw if isinstance(raw, (dict, list)) else str(raw), indent=2) + "\n```")
-
-    # Write markdown report into .cache/resumes by default (out_path may override)
+    # Build a plain-text report (no markdown/LLM sections)
     try:
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         cache_reports = os.path.join(repo_root, ".cache", "resumes")
@@ -211,8 +184,16 @@ def main():
             target_out = os.path.join(cache_reports, os.path.basename(out_path))
         else:
             target_out = out_path
+
+        # Compose a minimal plaintext report that is useful even when PDF
+        # extraction cannot preserve layout/typography. The report contains
+        # a small header and the raw extracted text (no markdown fenced blocks).
         with open(target_out, "w", encoding="utf-8") as f:
-            f.write("\n\n".join(report))
+            f.write(f"Source file: {in_path}\n")
+            f.write(f"Extractor used: {used}\n")
+            f.write(f"Chars extracted: {len(extracted)}\n\n")
+            f.write(extracted or "")
+
         # set out_path to the actual written location for user message
         out_path = target_out
     except Exception as e:
