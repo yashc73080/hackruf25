@@ -29,8 +29,9 @@ An AI-powered teammate-to-role matching tool that analyzes resumes and GitHub pr
 └── teamskills/
 		├── components.json
 		├── jsconfig.json
-		# SkillSync – AI‑Powered Team Role Assignment
 ```
+
+# SkillSync – AI‑Powered Team Role Assignment
 SkillSync helps teams go from a rough idea to concrete roles and assignments in minutes. It:
 
 - Refines a free‑form project idea into actionable specifications with an AI planning chat
