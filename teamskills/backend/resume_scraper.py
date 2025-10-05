@@ -211,7 +211,9 @@ def main():
 
     # Save original upload for traceability in .uploads/
     try:
-        uploads_dir = os.path.join(os.path.dirname(__file__), "..", ".uploads")
+        # Save uploads at the repository root in a hidden `.uploads/` directory
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        uploads_dir = os.path.join(repo_root, ".uploads")
         os.makedirs(uploads_dir, exist_ok=True)
         base = os.path.basename(in_path)
         dst = os.path.join(uploads_dir, base)
