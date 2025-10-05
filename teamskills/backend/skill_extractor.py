@@ -5,8 +5,8 @@ from typing import List, Dict, Optional, Union
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-from github_scraper import summarize_user
-from resume_scraper import extract_with_pdfplumber, extract_with_gcv
+from .github_scraper import summarize_user
+from .resume_scraper import extract_with_pdfplumber, extract_with_gcv
 
 # Load environment variables - check multiple locations
 load_dotenv()  # Default behavior
@@ -19,7 +19,12 @@ if os.path.exists(env_local_path):
 # Configure Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        configure_fn = getattr(genai, "configure", None)
+        if callable(configure_fn):
+            configure_fn(api_key=GEMINI_API_KEY)
+    except Exception as _e:
+        print(f"Warning: failed to configure Gemini: {_e}")
 
 def extract_text_from_file(file_path: str, threshold: int = 500) -> str:
     """
@@ -138,7 +143,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         4. Certifications and qualifications
         5. Key experience highlights
         
-        Format the response as JSON with these categories:
+    Order each array with the strongest/most defining skills first and weaker/less identifiable ones later. Use evidence like frequency, recency, emphasis, and role impact when ranking.
+
+    Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
         - technical_skills: array of technical skills
         - soft_skills: array of soft skills
         - domains: array of industry domains/areas
@@ -156,7 +163,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         4. Development tools and methodologies
         5. Technical concepts and keywords
         
-        Format the response as JSON with these categories:
+    Order each array with the strongest/most defining items first and weaker/less identifiable ones later. Use evidence like prominence in the README, code emphasis, and repo stars when ranking.
+
+    Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
         - languages: array of programming languages
         - frameworks: array of frameworks and libraries
         - tools: array of development tools
@@ -174,7 +183,9 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         4. Certifications and qualifications
         5. Key experience and project highlights
         
-        Format the response as JSON with these categories:
+    Order each array with the strongest/most defining items first and weaker/less identifiable ones later. Use frequency, recency, prominence, and cross-source corroboration when ranking.
+
+    Format the response as JSON with these categories, keeping each array ordered strongest→weakest:
         - technical_skills: array of all technical skills
         - soft_skills: array of soft skills
         - domains: array of domains and areas
@@ -185,11 +196,20 @@ def extract_skills_with_gemini(text_content: str, content_type: str = "mixed") -
         """
     
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
-        response = model.generate_content(prompt + text_content)
+        ModelCtor = getattr(genai, "GenerativeModel", None)
+        if not callable(ModelCtor):
+            raise RuntimeError("google.generativeai.GenerativeModel not available")
+        model = ModelCtor('gemini-2.5-flash-lite')
+        gen_fn = getattr(model, "generate_content", None)
+        if not callable(gen_fn):
+            raise RuntimeError("generate_content not available on GenerativeModel instance")
+        response = gen_fn(prompt + text_content)
         
         # Try to parse JSON response
-        response_text = response.text.strip()
+        response_text = getattr(response, "text", None)
+        if not isinstance(response_text, str):
+            response_text = str(response)
+        response_text = response_text.strip()
         
         # Clean up the response if it's wrapped in markdown code blocks
         if response_text.startswith("```json"):

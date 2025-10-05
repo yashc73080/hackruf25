@@ -1,26 +1,12 @@
 import { NextResponse } from 'next/server';
 
-// Configure backend URL (FastAPI) - prefer NEXT_PUBLIC_BACKEND_URL, then BACKEND_URL, fallback to localhost
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:8000';
-
-// Ensure Node.js runtime for this route (not Edge) to fully support multipart streams
 export const runtime = 'nodejs';
-
-// Add this GET handler for browser testing
-export async function GET() {
-  return NextResponse.json({
-    message: "Process Team Data API is running!",
-    endpoint: "/api/process-team-data",
-    methods: ["GET", "POST"],
-    description: "Use POST to submit team data with resumes",
-    timestamp: new Date().toISOString()
-  });
-}
 
 export async function POST(req) {
   try {
     const payload = await req.json();
-    const url = `${BACKEND_URL.replace(/\/$/, '')}/api/extract-skills`;
+    const url = `${BACKEND_URL.replace(/\/$/, '')}/api/extract-roles`;
     const backendRes = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -28,38 +14,23 @@ export async function POST(req) {
     });
 
     const contentType = backendRes.headers.get('content-type') || '';
-
     if (!backendRes.ok) {
       const errorPayload = contentType.includes('application/json')
         ? await backendRes.json().catch(() => ({ error: backendRes.statusText }))
         : { error: await backendRes.text().catch(() => backendRes.statusText) };
-      console.error('❌ Backend error from FastAPI:', backendRes.status, errorPayload);
       return NextResponse.json(
-        {
-          success: false,
-          message: 'Backend processing failed',
-          backendUrl: url,
-          status: backendRes.status,
-          error: errorPayload,
-        },
+        { success: false, error: errorPayload, status: backendRes.status },
         { status: 502 }
       );
     }
 
-    // Pass through JSON if provided; otherwise proxy text
     if (contentType.includes('application/json')) {
       const data = await backendRes.json();
       return NextResponse.json(data, { status: backendRes.status });
     }
-
     const text = await backendRes.text();
     return new Response(text, { status: backendRes.status, headers: { 'content-type': contentType || 'text/plain' } });
-    
   } catch (error) {
-    console.error('❌ Error processing team data:', error);
-    return NextResponse.json(
-      { success: false, error: error.message, stack: error.stack },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
