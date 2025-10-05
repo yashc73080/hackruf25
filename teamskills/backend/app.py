@@ -7,6 +7,13 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+# ---------------- import skill extractor ----------------
+try:
+    from skill_extractor import analyze_profile
+except Exception as e:
+    print(f"Warning: Could not import skill_extractor: {e}")
+    analyze_profile = None
+
 # ---------------- paths & storage ----------------
 DB_PATH = "team_members.json"
 UPLOAD_DIR = "resumes"
@@ -36,109 +43,105 @@ def norm_list(items: Optional[List[str]]) -> List[str]:
             out.append(val)
     return out
 
-# ---------------- import your scrapers ----------------
-try:
-    import github_scraper as gh  # your module in same folder
-except Exception:
-    gh = None
-
 # ---------------- helpers: GitHub ----------------
 def parse_github_username(url: Optional[str]) -> Optional[str]:
     if not url: return None
     m = re.search(r"github\.com/([^/\s]+)", url.strip())
     return m.group(1) if m else None
 
-def run_github_scraper(github_url: Optional[str]) -> dict:
+# ---------------- helpers: Skill Extraction ----------------
+def run_skill_extraction(github_url: Optional[str] = None, resume_path: Optional[str] = None) -> dict:
     """
+    Uses the new skill_extractor.py to analyze GitHub and/or resume.
     Returns: {"languages":[...], "skills":[...], "keywords":[...]}
-    Uses your github_scraper.py if available.
     """
     result = {"languages": [], "skills": [], "keywords": []}
-    if not github_url or not gh:
+    
+    if not analyze_profile:
+        print("Skill extractor not available")
         return result
 
-    username = parse_github_username(github_url)
-    if not username:
+    # Extract GitHub username if URL provided
+    github_username = None
+    if github_url:
+        github_username = parse_github_username(github_url)
+    
+    # Skip if neither source is available
+    if not github_username and not resume_path:
         return result
 
     try:
-        if hasattr(gh, "summarize_user"):
-            data = gh.summarize_user(username) or {}
-            langs = [item["name"] for item in data.get("overall_language_percentages", [])]
-            result["languages"] = list(dict.fromkeys(langs))
-
-            # try optional keywords from top READMEs if your module has it
-            if hasattr(gh, "extract_keywords_from_top_readmes"):
-                kws = gh.extract_keywords_from_top_readmes(username, top=3) or []
-                result["keywords"] = list(dict.fromkeys(kws))
-            elif hasattr(gh, "get_keywords"):
-                kws = gh.get_keywords(username) or []
-                result["keywords"] = list(dict.fromkeys(kws))
-
-        elif hasattr(gh, "scrape"):
-            payload = gh.scrape(github_url) or {}
-            for k in ("languages", "skills", "keywords"):
-                if payload.get(k):
-                    result[k] = list(dict.fromkeys(payload[k]))
-    except Exception:
-        # don't crash the request if GH scraping fails
-        pass
-
-    return result
-
-# ---------------- helpers: Resume (call your CLI) ----------------
-def run_resume_scraper_via_cli(resume_path: Optional[str]) -> dict:
-    """
-    Calls your resume_scraper.py as a subprocess:
-      python resume_scraper.py --input <pdf> --output <tmp.md> --threshold 999999
-    Parses the markdown's "## Extracted Skills" bullets.
-    Returns: {"languages":[...], "skills":[...], "keywords":[...]}
-    """
-    if not resume_path or not os.path.exists(resume_path):
-        return {"languages": [], "skills": [], "keywords": []}
-
-    # temp output for your CLI markdown report
-    with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as tmp:
-        out_path = tmp.name
-
-    try:
-        cmd = [sys.executable, "resume_scraper.py",
-               "--input", resume_path, "--output", out_path, "--threshold", "999999"]
-        subprocess.run(cmd, check=True)
-
-        with open(out_path, "r", encoding="utf-8") as f:
-            md = f.read()
-
-        # parse "## Extracted Skills" block: lines like "- `skill`"
-        skills = []
-        m = re.search(r"## Extracted Skills(.*?)(?:\n##|\Z)", md, flags=re.S|re.I)
-        block = m.group(1) if m else ""
-        for line in block.splitlines():
-            line = line.strip()
-            if line.startswith("- `") and line.endswith("`"):
-                skills.append(line[3:-1])
-
-        # derive languages from skills list (basic set; adjust if you want)
+        print(f"Running skill extraction - GitHub: {github_username}, Resume: {resume_path}")
+        analysis_result = analyze_profile(
+            github_username=github_username,
+            resume_path=resume_path
+        )
+        
+        # Extract skills from the analysis result
+        all_skills = set()
+        all_languages = set()
+        all_keywords = set()
+        
+        # Process GitHub analysis
+        github_analysis = analysis_result.get("github_analysis", {})
+        if github_analysis and "error" not in github_analysis:
+            # Add languages from GitHub
+            all_languages.update(github_analysis.get("languages", []))
+            # Add frameworks and tools as skills
+            all_skills.update(github_analysis.get("frameworks", []))
+            all_skills.update(github_analysis.get("tools", []))
+            # Add concepts and domains as keywords
+            all_keywords.update(github_analysis.get("concepts", []))
+            all_keywords.update(github_analysis.get("domains", []))
+        
+        # Process resume analysis
+        resume_analysis = analysis_result.get("resume_analysis", {})
+        if resume_analysis and "error" not in resume_analysis:
+            # Add technical skills and languages
+            all_skills.update(resume_analysis.get("technical_skills", []))
+            all_skills.update(resume_analysis.get("soft_skills", []))
+            # Add domains and certifications as keywords
+            all_keywords.update(resume_analysis.get("domains", []))
+            all_keywords.update(resume_analysis.get("certifications", []))
+            all_keywords.update(resume_analysis.get("experience_keywords", []))
+        
+        # Process combined analysis if available
+        combined_analysis = analysis_result.get("combined_skills", {})
+        if combined_analysis and "error" not in combined_analysis:
+            all_skills.update(combined_analysis.get("technical_skills", []))
+            all_skills.update(combined_analysis.get("soft_skills", []))
+            all_keywords.update(combined_analysis.get("domains", []))
+            all_keywords.update(combined_analysis.get("certifications", []))
+            all_keywords.update(combined_analysis.get("keywords", []))
+        
+        # Separate programming languages from skills
         prog_langs = {
-            "python","java","javascript","typescript","c","c++","c#","go","rust",
-            "matlab","sql","r","scala","html","css","bash","shell","powershell"
+            "python", "java", "javascript", "typescript", "c", "c++", "c#", "go", "rust",
+            "matlab", "sql", "r", "scala", "html", "css", "bash", "shell", "powershell",
+            "php", "ruby", "swift", "kotlin", "dart", "perl", "lua", "haskell", "clojure",
+            "f#", "pascal", "cobol", "fortran", "assembly", "vb.net", "objective-c"
         }
-        langs = sorted({s.lower() for s in skills if s.lower() in prog_langs})
-
-        # unique while preserving order
-        skills_unique = list(dict.fromkeys(skills))
-        keywords = skills_unique  # mirror for now
-
-        return {
-            "languages": langs,
-            "skills": skills_unique,
-            "keywords": keywords
+        
+        # Extract languages from skills and add to languages set
+        for skill in list(all_skills):
+            if skill.lower() in prog_langs:
+                all_languages.add(skill)
+                all_skills.discard(skill)  # Remove from skills since it's a language
+        
+        result = {
+            "languages": norm_list(list(all_languages)),
+            "skills": norm_list(list(all_skills)),
+            "keywords": norm_list(list(all_keywords))
         }
-    except Exception:
-        return {"languages": [], "skills": [], "keywords": []}
-    finally:
-        try: os.remove(out_path)
-        except Exception: pass
+        
+        print(f"Skill extraction completed: {len(result['languages'])} languages, {len(result['skills'])} skills, {len(result['keywords'])} keywords")
+        
+    except Exception as e:
+        print(f"Error in skill extraction: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return result
 
 # ---------------- FastAPI app ----------------
 app = FastAPI(title="Team Member Store")
@@ -241,6 +244,7 @@ async def process_team_data(
                     m["github_url"] = f"https://github.com/{member_github}"
 
             # Save resume file if provided
+            resume_path = None
             if member_resume and hasattr(member_resume, 'read'):
                 ext = os.path.splitext(getattr(member_resume, 'filename', 'resume.pdf'))[1] or ".pdf"
                 dest = os.path.join(UPLOAD_DIR, f"{m['member_id']}{ext}")
@@ -251,20 +255,20 @@ async def process_team_data(
                 with open(dest, "wb") as f:
                     f.write(content)
                 m["resume_path"] = dest
+                resume_path = dest
 
-            # Run scrapers
-            print("Running GitHub scraper...")
-            gh_res = run_github_scraper(m.get("github_url"))
-            print(f"GitHub results: {gh_res}")
-            
-            print("Running resume scraper...")
-            cv_res = run_resume_scraper_via_cli(m.get("resume_path"))
-            print(f"Resume results: {cv_res}")
+            # Run skill extraction using the new unified approach
+            print("Running skill extraction...")
+            skill_results = run_skill_extraction(
+                github_url=m.get("github_url"),
+                resume_path=resume_path or m.get("resume_path")
+            )
+            print(f"Skill extraction results: {skill_results}")
 
-            # Merge + dedupe
-            m["languages"] = norm_list((m.get("languages") or []) + (gh_res.get("languages") or []) + (cv_res.get("languages") or []))
-            m["skills"]     = norm_list((m.get("skills") or []) + (gh_res.get("skills") or []) + (cv_res.get("skills") or []))
-            m["keywords"]   = norm_list((m.get("keywords") or []) + (gh_res.get("keywords") or []) + (cv_res.get("keywords") or []))
+            # Merge + dedupe with existing data
+            m["languages"] = norm_list((m.get("languages") or []) + (skill_results.get("languages") or []))
+            m["skills"]     = norm_list((m.get("skills") or []) + (skill_results.get("skills") or []))
+            m["keywords"]   = norm_list((m.get("keywords") or []) + (skill_results.get("keywords") or []))
 
             print(f"Final member data: {m}")
             processed_members.append(m)
@@ -298,7 +302,7 @@ async def create_or_update_member(
     resume_file: UploadFile | None = None
 ):
     """
-    Create/update by NAME, store GitHub URL, save PDF, run scrapers, and persist.
+    Create/update by NAME, store GitHub URL, save PDF, run skill extraction, and persist.
     """
     db = load_db()
     members = db["members"]
@@ -327,14 +331,16 @@ async def create_or_update_member(
             f.write(await resume_file.read())
         m["resume_path"] = dest
 
-    # run scrapers
-    gh_res = run_github_scraper(m.get("github_url"))
-    cv_res = run_resume_scraper_via_cli(m.get("resume_path"))
+    # run skill extraction
+    skill_results = run_skill_extraction(
+        github_url=m.get("github_url"),
+        resume_path=m.get("resume_path")
+    )
 
     # merge + dedupe
-    m["languages"] = norm_list((m.get("languages") or []) + (gh_res.get("languages") or []) + (cv_res.get("languages") or []))
-    m["skills"]     = norm_list((m.get("skills") or []) + (gh_res.get("skills") or []) + (cv_res.get("skills") or []))
-    m["keywords"]   = norm_list((m.get("keywords") or []) + (gh_res.get("keywords") or []) + (cv_res.get("keywords") or []))
+    m["languages"] = norm_list((m.get("languages") or []) + (skill_results.get("languages") or []))
+    m["skills"]     = norm_list((m.get("skills") or []) + (skill_results.get("skills") or []))
+    m["keywords"]   = norm_list((m.get("keywords") or []) + (skill_results.get("keywords") or []))
 
     save_db(db)
     return {"ok": True, "member": m}
@@ -346,7 +352,7 @@ async def add_skills(
     keywords: Optional[List[str]] = None,
     languages: Optional[List[str]] = None
 ):
-    """Optional: push skills later if your scrapers run elsewhere."""
+    """Optional: push skills later if needed."""
     db = load_db()
     members = db["members"]
     m = find_by_name(members, name)
@@ -362,18 +368,21 @@ async def add_skills(
 
 @app.post("/member/rescrape")
 def rescrape_member(name: str):
-    """Re-run scrapers for an existing member (no re-upload needed)."""
+    """Re-run skill extraction for an existing member (no re-upload needed)."""
     db = load_db()
     m = find_by_name(db["members"], name)
     if not m:
         return JSONResponse({"ok": False, "error": "member not found"}, status_code=404)
 
-    gh_res = run_github_scraper(m.get("github_url"))
-    cv_res = run_resume_scraper_via_cli(m.get("resume_path"))
+    skill_results = run_skill_extraction(
+        github_url=m.get("github_url"),
+        resume_path=m.get("resume_path")
+    )
 
-    m["languages"] = norm_list((m.get("languages") or []) + (gh_res.get("languages") or []) + (cv_res.get("languages") or []))
-    m["skills"]     = norm_list((m.get("skills") or []) + (gh_res.get("skills") or []) + (cv_res.get("skills") or []))
-    m["keywords"]   = norm_list((m.get("keywords") or []) + (gh_res.get("keywords") or []) + (cv_res.get("keywords") or []))
+    # Replace existing skills instead of merging for rescrape
+    m["languages"] = skill_results.get("languages", [])
+    m["skills"]    = skill_results.get("skills", [])
+    m["keywords"]  = skill_results.get("keywords", [])
 
     save_db(db)
     return {"ok": True, "member": m}
@@ -389,3 +398,4 @@ def get_member(name: str):
     if not m:
         return JSONResponse({"ok": False, "error": "member not found"}, status_code=404)
     return {"ok": True, "member": m}
+    
