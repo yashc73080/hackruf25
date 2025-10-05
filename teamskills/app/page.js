@@ -27,11 +27,8 @@ export default function Home() {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-8 md:p-12 bg-background">
       <header className="mb-8 text-center">
         <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl">
-          Team Skills Matcher
+          SkillSync: AI-Powered Team Role Assignment
         </h1>
-        <p className="text-lg text-muted-foreground mt-2">
-          Phase {currentPhase === PHASES.PLANNING ? '1: Project Planning' : '2: Gather Team Data'}
-        </p>
       </header>
 
       {currentPhase === PHASES.PLANNING && (
