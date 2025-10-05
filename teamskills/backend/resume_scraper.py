@@ -24,6 +24,9 @@ import io
 import os
 import sys
 from typing import List
+import statistics
+from collections import defaultdict
+from typing import Optional
 
 
 # --- Optional imports guarded at use-time ---
@@ -61,6 +64,98 @@ def extract_with_pdfplumber(pdf_path: str) -> str:
             if t.strip():
                 text_parts.append(t.strip())
     return "\n\n\f\n\n".join(text_parts).strip()  # add form-feed between pages
+
+
+def generate_markdown_from_pdf(pdf_path: str) -> Optional[str]:
+    """
+    Heuristic Markdown generator using pdfplumber character metrics.
+    Returns Markdown text when headings are detected; otherwise None.
+    """
+    pdfplumber = _import_pdfplumber()
+    try:
+        lines_info = []
+        with pdfplumber.open(pdf_path) as pdf:
+            for pnum, page in enumerate(pdf.pages):
+                # Use page.extract_text() for line-level text to preserve spacing
+                page_text = page.extract_text() or ""
+                page_lines = [ln.rstrip() for ln in page_text.splitlines() if ln.strip()]
+                if not page_lines:
+                    continue
+
+                # Group chars by rounded 'top' to compute font sizes per visual line
+                chars = page.chars or []
+                buckets: list[tuple[int, list]] = []
+                if chars:
+                    temp: dict[int, list] = defaultdict(list)
+                    for ch in chars:
+                        try:
+                            y = int(round(float(ch.get("top", 0))))
+                        except Exception:
+                            y = 0
+                        temp[y].append(ch)
+                    buckets = sorted(temp.items(), key=lambda it: it[0])
+
+                # If the number of visual buckets and extracted text lines differ a lot,
+                # don't attempt mapping — fallback to None so we emit plaintext.
+                if buckets and abs(len(buckets) - len(page_lines)) > max(2, int(len(page_lines) * 0.4)):
+                    return None
+
+                # Map lines (by order) to buckets (by order) when possible to get avg font sizes
+                for idx, text in enumerate(page_lines):
+                    avg_size = 0.0
+                    fonts: list[str] = []
+                    y = None
+                    if buckets:
+                        b_idx = min(idx, len(buckets) - 1)
+                        y, chs = buckets[b_idx]
+                        sizes = [float(c.get("size", 0)) for c in chs if c.get("size")]
+                        avg_size = float(sum(sizes) / len(sizes)) if sizes else 0.0
+                        fonts = [c.get("fontname", "") for c in chs]
+
+                    lines_info.append({"page": pnum, "y": y or 0, "text": text, "avg_size": avg_size, "fonts": fonts})
+
+        if not lines_info:
+            return None
+
+        sizes = [li["avg_size"] for li in lines_info if li["avg_size"] > 0]
+        if not sizes:
+            return None
+
+        median = statistics.median(sizes)
+        max_size = max(sizes)
+
+        # If there's not a meaningful size difference, don't attempt markdown
+        if median <= 0 or (max_size / median) < 1.15:
+            return None
+
+        md_lines: List[str] = []
+        for li in lines_info:
+            text = li["text"]
+            avg = li["avg_size"]
+
+            # simple list detection
+            if text.startswith(("- ", "• ", "* ", "– ")) or (len(text) > 2 and text[0].isdigit() and text[1] in ").) "):
+                md_lines.append(text)
+                continue
+
+            # heading heuristics: very large font -> H1 (name), large font -> H2
+            if avg >= (median + (max_size - median) * 0.6):
+                # if this line is the absolute largest font (e.g. candidate name), use H1
+                if abs(avg - max_size) < 1e-6 or avg >= max_size - 0.5:
+                    md_lines.append(f"# {text}")
+                else:
+                    md_lines.append(f"## {text}")
+            else:
+                md_lines.append(text)
+
+        # ensure we have at least one heading for this to be considered Markdown
+        if not any(l.startswith("#") for l in md_lines):
+            return None
+
+        # Join with double newlines to separate blocks
+        return "\n\n".join(md_lines)
+    except Exception:
+        return None
 
 def extract_with_gcv(input_path: str) -> str:
     """
@@ -164,17 +259,7 @@ def main():
             print(f"ERROR: Extraction failed: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Build a richer Markdown report instead of a plain text dump
-    report = []
-    report.append(f"# Resume Extraction Report\n")
-    report.append(f"- source_file: `{in_path}`")
-    report.append(f"- extractor_used: `{used}`")
-    report.append(f"- chars_extracted: {len(extracted)}\n")
-
-    report.append("## Extracted Text (first 30k chars)\n")
-    report.append("```\n" + (extracted[:30000] if extracted else "") + "\n```")
-
-    # Build a plain-text report (no markdown/LLM sections)
+    # Write a simple plaintext report (.txt) preserving extracted spacing
     try:
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         cache_reports = os.path.join(repo_root, ".cache", "resumes")
@@ -185,16 +270,19 @@ def main():
         else:
             target_out = out_path
 
-        # Compose a minimal plaintext report that is useful even when PDF
-        # extraction cannot preserve layout/typography. The report contains
-        # a small header and the raw extracted text (no markdown fenced blocks).
+        # ensure .txt extension
+        if target_out.endswith(".md") or target_out.endswith(".txt"):
+            base = os.path.splitext(target_out)[0]
+        else:
+            base = target_out
+        target_out = base + ".txt"
+
         with open(target_out, "w", encoding="utf-8") as f:
             f.write(f"Source file: {in_path}\n")
             f.write(f"Extractor used: {used}\n")
             f.write(f"Chars extracted: {len(extracted)}\n\n")
             f.write(extracted or "")
 
-        # set out_path to the actual written location for user message
         out_path = target_out
     except Exception as e:
         print(f"ERROR: Could not write output file: {out_path} ({e})", file=sys.stderr)

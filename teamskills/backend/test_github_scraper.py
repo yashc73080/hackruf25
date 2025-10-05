@@ -14,7 +14,7 @@ from teamskills.backend.github_scraper import summarize_user
 
 
 def main(argv):
-    username = argv[1] if len(argv) > 1 else "yc73080"
+    username = argv[1] if len(argv) > 1 else "yashc73080"
     try:
         res = summarize_user(username)
         print(json.dumps(res, indent=2, ensure_ascii=False))

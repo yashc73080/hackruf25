@@ -1,63 +1,94 @@
 #!/usr/bin/env python3
-"""Simple CLI tester for resume_scraper.py
-Usage:
-    python -m teamskills.backend.test_resume_scraper <filename-or-path>
+"""Small CLI tester for `teamskills.backend.resume_scraper`.
 
-This tester accepts either a basename located in the repo-root `.uploads/`
-directory, or a full/relative path to a resume file. Generated reports are
-written into the repo-root cache: `.cache/resumes/<stem>.report.md`.
+Usage:
+  python -m teamskills.backend.test_resume_scraper <resume_basename_or_path>
+
+Behavior:
+ - If a basename is provided and it exists under repo-root `.uploads/`, that file is used.
+ - Otherwise the provided path is used as-is (absolute or relative to repo root).
+ - The tester invokes the scraper via the same Python interpreter (keeps venv).
+ - Output report is created at repo-root `.cache/resumes/<stem>.report.txt` and a short preview is printed.
 """
 import sys
-import os
+import subprocess
 from pathlib import Path
-
-try:
-    from teamskills.backend.resume_scraper import main as resume_main
-except Exception:
-    # fallback: import as script
-    resume_main = None
+import argparse
 
 
-def run(path: str):
-    repo_root = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+UPLOADS_DIR = REPO_ROOT / ".uploads"
+CACHE_RESUMES = REPO_ROOT / ".cache" / "resumes"
+SCRAPER_MODULE = "teamskills.backend.resume_scraper"
 
-    candidate = Path(path)
-    # If a simple basename was provided and exists under .uploads, prefer that
-    if not candidate.is_absolute() and (repo_root / ".uploads" / candidate).exists():
-        in_path = repo_root / ".uploads" / candidate
-    else:
-        in_path = (candidate if candidate.is_absolute() else repo_root / candidate)
 
-    if not in_path.exists():
-        print(f"ERROR: input not found: {in_path}")
-        return 2
+def resolve_input(path_or_basename: str) -> Path:
+    p = Path(path_or_basename)
+    if p.is_absolute() and p.exists():
+        return p
+    # check relative to repo root
+    rel = REPO_ROOT / p
+    if rel.exists():
+        return rel
+    # check uploads
+    up = UPLOADS_DIR / p
+    if up.exists():
+        return up
+    raise FileNotFoundError(f"Input file not found: {path_or_basename} (tried exact, repo-root relative, and .uploads)")
 
-    # default output into repo-root .cache/resumes
-    out_dir = repo_root / ".cache" / "resumes"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{in_path.stem}.report.md"
 
-    # call resume_scraper.py as script
-    cmd = (
-        f'"{sys.executable}" "{repo_root}/teamskills/backend/resume_scraper.py" '
-        f'--input "{in_path}" --output "{out_path}"'
-    )
-    print("Running:", cmd)
-    rc = os.system(cmd)
-    if rc != 0:
-        print("resume_scraper failed with exit code", rc)
-        return rc
+def make_output_path(input_path: Path) -> Path:
+    CACHE_RESUMES.mkdir(parents=True, exist_ok=True)
+    stem = input_path.stem
+    return CACHE_RESUMES / f"{stem}.report.txt"
 
-    print("Wrote report:", out_path)
+
+def run_scraper(input_path: Path, output_path: Path) -> None:
+    cmd = [sys.executable, "-m", SCRAPER_MODULE, "--input", str(input_path), "--output", str(output_path)]
+    print("Running:", " ".join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        print("Resume scraper failed:\n", proc.stdout, proc.stderr, file=sys.stderr)
+        raise SystemExit(proc.returncode)
+    if proc.stdout:
+        print(proc.stdout)
+
+
+def preview_file(path: Path, nchars: int = 600) -> None:
+    if not path.exists():
+        print(f"Expected output not found: {path}", file=sys.stderr)
+        return
+    txt = path.read_text(encoding="utf-8", errors="replace")
+    preview = txt[:nchars]
+    print(f"\nReport: {path}\n--- Preview ({len(preview)} chars) ---\n")
+    print(preview)
+    if len(txt) > nchars:
+        print("\n... (truncated) ...\n")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("input", help="Resume basename (in .uploads) or full path")
+    args = ap.parse_args()
+
     try:
-        print(out_path.read_text()[:4000])
-    except Exception:
-        pass
-    return 0
+        input_path = resolve_input(args.input)
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(2)
+
+    out_path = make_output_path(input_path)
+
+    try:
+        run_scraper(input_path, out_path)
+    except SystemExit as e:
+        sys.exit(e.code if isinstance(e, SystemExit) else 1)
+    except Exception as e:
+        print("Error running scraper:", str(e), file=sys.stderr)
+        sys.exit(1)
+
+    preview_file(out_path)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m teamskills.backend.test_resume_scraper <filename-or-path>")
-        sys.exit(2)
-    sys.exit(run(sys.argv[1]))
+    main()
