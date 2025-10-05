@@ -1,4 +1,12 @@
-import os, sys, json, requests
+import base64
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+import requests
 from dotenv import load_dotenv
 
 # ---------- Setup ----------
@@ -8,7 +16,36 @@ GRAPHQL_URL = f"{API}/graphql"
 
 TOKEN = os.getenv("GITHUB_TOKEN")
 REST_HEADERS = {"Authorization": f"token {TOKEN}"} if TOKEN else {}
-GQL_HEADERS  = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
+GQL_HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
+
+# Small on-disk cache for development to avoid excessive GitHub calls
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+TOP_N = int(os.getenv("TOP_N", "5"))
+CACHE_TTL = int(os.getenv("GITHUB_CACHE_TTL", "3600"))
+
+
+def _cache_get(key: str) -> Optional[dict]:
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    try:
+        if not os.path.exists(path):
+            return None
+        mtime = os.path.getmtime(path)
+        if time.time() - mtime > CACHE_TTL:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _cache_set(key: str, value: dict):
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(value, f)
+    except Exception:
+        pass
 
 # ---------- HTTP helpers ----------
 def rest_get_json(url):
@@ -116,6 +153,32 @@ def list_contributed_repos_graphql(user, first=100):
         vars["after"] = block["pageInfo"]["endCursor"]
     return out
 
+
+def get_repo_readme(owner: str, name: str) -> Optional[str]:
+    """Fetch README via REST API and return a decoded snippet (~2000 chars) or None."""
+    cache_key = f"readme_{owner}_{name}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached.get("readme")
+    url = f"{API}/repos/{owner}/{name}/readme"
+    r = requests.get(url, headers=REST_HEADERS if TOKEN else {})
+    if r.status_code != 200:
+        _cache_set(cache_key, {"readme": None})
+        return None
+    try:
+        j = r.json()
+        content = j.get("content")
+        enc = j.get("encoding")
+        if content and enc == "base64":
+            raw = base64.b64decode(content).decode("utf-8", errors="replace")
+            snippet = raw[:2000]
+            _cache_set(cache_key, {"readme": snippet})
+            return snippet
+    except Exception:
+        pass
+    _cache_set(cache_key, {"readme": None})
+    return None
+
 def list_contributed_repos_events(user, max_repos=30, max_pages=3):
     """
     Fallback: recent public PushEvents (works without token).
@@ -141,6 +204,106 @@ def list_contributed_repos_events(user, max_repos=30, max_pages=3):
                         return repos
     return repos
 
+
+def recent_pushes_30d(user, max_pages=5):
+    """Count PushEvents by this user in last 30 days (public events)."""
+    cache_key = f"pushes_{user}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached.get("count", 0)
+    cutoff = time.time() - (30 * 24 * 3600)
+    count = 0
+    for page in range(1, max_pages + 1):
+        url = f"{API}/users/{user}/events/public?per_page=100&page={page}"
+        r = requests.get(url, headers=REST_HEADERS if TOKEN else {})
+        if r.status_code != 200:
+            break
+        events = r.json() or []
+        if not events:
+            break
+        for ev in events:
+            if ev.get("type") != "PushEvent":
+                continue
+            created = ev.get("created_at")
+            try:
+                # Normalize ISO8601: handle fractional seconds and trailing 'Z'
+                if not created:
+                    raise ValueError("no timestamp")
+                s = created
+                # if ends with Z (UTC), replace with +00:00 for fromisoformat
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                # if fractional seconds exist, fromisoformat handles them
+                dt = datetime.fromisoformat(s)
+                t = dt.timestamp()
+            except Exception:
+                t = 0
+            if t >= cutoff:
+                count += 1
+    _cache_set(cache_key, {"count": count})
+    if count > 0:
+        _cache_set(cache_key, {"count": count})
+        return count
+
+    # Fallback: count repos (owned + contributed) with updated_at within past 30 days
+    # make cutoff a timezone-aware UTC datetime to compare against parsed ISO datetimes
+    try:
+        cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
+    except Exception:
+        # fallback to naive UTC if timezone attribute missing
+        cutoff_dt = datetime.utcfromtimestamp(cutoff)
+    recent_repos = 0
+    try:
+        owned = list_owned_repos(user) or []
+        for r in owned:
+            updated = r.get("pushed_at") or r.get("updated_at")
+            if updated:
+                s = updated
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                try:
+                    dt = datetime.fromisoformat(s)
+                    # ensure dt is timezone-aware; treat naive as UTC
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                try:
+                    if dt >= cutoff_dt:
+                        recent_repos += 1
+                except Exception:
+                    # If comparison fails for any reason, skip this repo
+                    continue
+        contributed = list_contributed_repos_graphql(user, first=100) or []
+        for c in contributed:
+            updated = c.get("updated_at")
+            if not updated:
+                m = get_repo_meta(c.get("owner"), c.get("name"))
+                updated = m.get("updated_at") if m else None
+            if updated:
+                s = updated
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                try:
+                    dt = datetime.fromisoformat(s)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                try:
+                    if dt >= cutoff_dt:
+                        recent_repos += 1
+                except Exception:
+                    continue
+    except Exception:
+        recent_repos = 0
+
+    _cache_set(cache_key, {"count": recent_repos})
+    return recent_repos
+
+    # fallback: if no events visible (often due to privacy/rate limits), count repos with recent updated_at
+
+
 def get_repo_meta(owner, name):
     return rest_get_json(f"{API}/repos/{owner}/{name}") or {}
 
@@ -161,7 +324,7 @@ def to_percentages(lang_bytes: dict):
     items = sorted(lang_bytes.items(), key=lambda x: x[1], reverse=True)
     return [{"name": k, "percent": round(v * 100.0 / total, 2), "bytes": v} for k, v in items]
 
-def repo_entry(owner, meta, lang_bytes):
+def repo_entry(owner, meta, lang_bytes, readme_snippet=None):
     return {
         "repo": meta.get("name"),
         "owner": owner,
@@ -170,10 +333,23 @@ def repo_entry(owner, meta, lang_bytes):
         "primary_language": (max(lang_bytes, key=lang_bytes.get) if lang_bytes else None),
         "stars": meta.get("stargazers_count", 0),
         "updated_at": meta.get("updated_at"),
+        "readme_snippet": readme_snippet,
     }
 
 # ---------- Core summary ----------
 def summarize_user(user):
+    # quick existence check
+    user_meta = rest_get_json(f"{API}/users/{user}")
+    if user_meta is None or (isinstance(user_meta, dict) and user_meta.get("message") == "Not Found"):
+        return {
+            "username": user,
+            "user_found": False,
+            "message": "GitHub user not found or no public access",
+            "overall_language_percentages": [],
+            "top_repos": [],
+            "repos": [],
+        }
+
     authenticated = get_authenticated_login()
     per_repo = []
     overall_bytes = {}
@@ -199,7 +375,8 @@ def summarize_user(user):
             lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
             for k, v in lbs.items():
                 overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
-            per_repo.append(repo_entry(owner, meta, lbs))
+            readme = get_repo_readme(owner, name)
+            per_repo.append(repo_entry(owner, meta, lbs, readme))
     else:
         # Different username: include public owned + contributed
         owned = list_owned_repos(user)
@@ -217,7 +394,8 @@ def summarize_user(user):
             lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
             for k, v in lbs.items():
                 overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
-            per_repo.append(repo_entry(owner, meta, lbs))
+            readme = get_repo_readme(owner, name)
+            per_repo.append(repo_entry(owner, meta, lbs, readme))
 
         contributed = list_contributed_repos_graphql(user, first=100)
         if not contributed:
@@ -251,7 +429,8 @@ def summarize_user(user):
             lbs = fold_notebooks_into_python(repo_lang_bytes(owner, name))
             for k, v in lbs.items():
                 overall_bytes[k] = overall_bytes.get(k, 0) + int(v)
-            per_repo.append(repo_entry(owner, meta, lbs))
+            readme = get_repo_readme(owner, name)
+            per_repo.append(repo_entry(owner, meta, lbs, readme))
 
     # Top 3 by stars desc, then updated_at desc
     per_repo_sorted = sorted(per_repo, key=lambda x: (x["stars"], x["updated_at"] or ""), reverse=True)
@@ -262,8 +441,9 @@ def summarize_user(user):
         "included_contributions": bool(TOKEN),
         "selection_strategy": "stars_then_recent",
         "overall_language_percentages": to_percentages(overall_bytes),
+        "recent_pushes_30d": recent_pushes_30d(user),
         "top_repos": top_repos,
-        "repos": per_repo
+        "repos": per_repo,
     }
 
 # ---------- CLI ----------
