@@ -1,8 +1,0 @@
-requests
-python-dotenv
-pdfplumber
-python-dateutil
-pymongo
-# optional
-# pytesseract
-# pdf2image
