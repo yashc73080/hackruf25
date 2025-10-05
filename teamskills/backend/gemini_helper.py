@@ -1,6 +1,178 @@
 #!/usr/bin/env python3
 """gemini_helper.py
 
+Lightweight Gemini helper for extracting normalized skill tokens.
+
+Notes:
+- Reads GEMINI_API_KEY or GOOGLE_API_KEY from env when the google-generativeai
+  client is installed.
+- Caches outputs under teamskills/.cache/gemini.
+- Supports a domain_priority hint (default 'cs').
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from typing import Any, Dict, Optional
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache", "gemini")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+DEFAULT_RETRIES = 3
+RETRY_BACKOFF = 1.5
+
+genai: Any = None
+_CLIENT_AVAILABLE = False
+try:
+    import google.generativeai as genai_lib  # type: ignore
+    genai = genai_lib
+    _CLIENT_AVAILABLE = True
+except Exception:
+    genai = None
+    _CLIENT_AVAILABLE = False
+
+
+def _cache_path(key: str) -> str:
+    h = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return os.path.join(CACHE_DIR, f"{h}.json")
+
+
+def _read_cache(key: str) -> Optional[Dict]:
+    p = _cache_path(key)
+    if os.path.exists(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def _write_cache(key: str, data: Dict) -> None:
+    p = _cache_path(key)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def normalize_token(tok: str) -> str:
+    t = tok.lower().strip()
+    # minimal normalization: map some obvious punctuation/variants
+    t = t.replace("c#", "csharp")
+    t = t.replace("react.js", "react").replace("reactjs", "react")
+    t = t.strip(". ,;:\n\t\"")
+    return t
+
+
+def _build_prompt(text: str, source: str, domain_priority: str) -> str:
+    domain_hint = {
+        "cs": "Prioritize computer-science and software engineering skills (languages, frameworks, tools, cloud, infra).",
+        "medical": "Prioritize clinical, medical, and healthcare skills and terminology, but include data/tech skills as present.",
+        "finance": "Prioritize finance, trading, and analytics skills, and include relevant software tools.",
+    }.get(domain_priority.lower(), f"Prioritize {domain_priority} domain skills but include software/data skills if present.")
+
+    return (
+        "You are a JSON-only extractor.\n"
+        f"{domain_hint}\n"
+        "Given the following text, extract a deduplicated list of technical skills, libraries, frameworks, tools, and services.\n"
+        "Return ONLY valid JSON with field: tokens_normalized (array of lowercase tokens).\n"
+        "Example: {\"tokens_normalized\": [\"python\", \"docker\"]}\n\n"
+        "Text:\n\n" + text[:30000]
+    )
+
+
+def extract_skills_from_text(text: str, source: str = "resume", domain_priority: str = "cs", retries: int = DEFAULT_RETRIES) -> Dict:
+    key = f"{domain_priority}:{source}:" + hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+    cached = _read_cache(key)
+    if cached:
+        return cached
+
+    prompt = _build_prompt(text or "", source, domain_priority)
+
+    # fallback heuristic when client missing
+    if not _CLIENT_AVAILABLE:
+        toks = []
+        for w in set((text or "").split()):
+            w = w.strip(".,;()[]{}:\"'`)\n\t").lower()
+            if len(w) <= 2:
+                continue
+            toks.append(normalize_token(w))
+        toks = sorted(set([t for t in toks if t]))
+        out = {"tokens_normalized": toks, "raw": "_fallback_no_client", "domain_priority": domain_priority}
+        _write_cache(key, out)
+        return out
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY not set in environment")
+    if genai is None:
+        raise RuntimeError("google-generativeai client not available; pip install google-generativeai")
+
+    genai.configure(api_key=api_key)
+
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = genai.chat.create(
+                model="gemini-1.0",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_output_tokens=512,
+            )
+
+            assistant_text = None
+            try:
+                if hasattr(resp, "last") and isinstance(resp.last, str):
+                    assistant_text = resp.last
+                elif isinstance(resp, dict) and "candidates" in resp:
+                    assistant_text = resp["candidates"][0]["content"]
+                else:
+                    assistant_text = str(resp)
+            except Exception:
+                assistant_text = str(resp)
+
+            # try to parse first JSON object in assistant_text
+            parsed = None
+            try:
+                import re
+
+                m = re.search(r"\{[\s\S]*\}", assistant_text)
+                if m:
+                    parsed = json.loads(m.group(0))
+            except Exception:
+                parsed = None
+
+            tokens = []
+            if parsed and isinstance(parsed, dict) and "tokens_normalized" in parsed:
+                tokens = [normalize_token(t) for t in parsed.get("tokens_normalized", [])]
+                tokens = sorted(dict.fromkeys([t for t in tokens if t]))
+            else:
+                # fallback to simple extraction
+                for w in set((text or "").split()):
+                    w = w.strip(".,;()[]{}:\"'`)\n\t").lower()
+                    if len(w) <= 2:
+                        continue
+                    tokens.append(normalize_token(w))
+                tokens = sorted(set(tokens))
+
+            out = {"tokens_normalized": tokens, "raw": assistant_text, "domain_priority": domain_priority}
+            _write_cache(key, out)
+            return out
+        except Exception as e:
+            last_err = e
+            backoff = RETRY_BACKOFF * (2 ** (attempt - 1))
+            time.sleep(backoff)
+            continue
+
+    raise RuntimeError(f"Gemini extraction failed after {retries} attempts: {last_err}")
+#!/usr/bin/env python3
+"""gemini_helper.py
+
 Simple Gemini (Google generative API) helper to extract normalized skills from text.
 
 Behavior:

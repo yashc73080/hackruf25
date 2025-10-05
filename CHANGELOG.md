@@ -6,8 +6,13 @@
 - Add: `teamskills/backend/test_scrape_user.py` and `teamskills/backend/test_smoke_scraper.py` for smoke tests.
 - CI: GitHub Actions workflow `.github/workflows/smoke-test.yml` added to run smoke tests on pushes to `vibecoding`.
 - Repo hygiene: remove generated cache files and add `.cache/` to `.gitignore`.
- - Add: `teamskills/backend/gemini_helper.py` — Gemini (Generative AI) helper for extracting normalized skill tokens from resume/README text with on-disk caching and retries.
- - Change: `teamskills/backend/resume_scraper.py` now writes a human-readable Markdown extraction report (includes extracted text snippet, extracted skills from Gemini, and raw LLM response) and saves the original upload to `teamskills/uploads/` for traceability.
- - Add: `gemini_helper` supports `domain_priority` (default `cs`) so extractions can prioritize computer-science skills or domain-specific vocabularies (e.g., `medical`, `finance`).
- - Add: local fallback heuristic in `gemini_helper` so the pipeline still works if the generative client isn't installed; outputs are cached under `.cache/gemini`.
- - Remove: experimental deterministic `skills_engine.py` and `skills_fallback.json` (migrated to Gemini-only extraction per project direction).
+
+### Added (vibecoding) — Gemini & resume improvements
+- Add: `teamskills/backend/gemini_helper.py` — helper that calls Gemini (google-generativeai) to extract normalized skill tokens from resume or README text; includes disk caching, retries, and domain hinting (e.g. `cs`, `medical`).
+- Change: `teamskills/backend/resume_scraper.py` updated to emit a Markdown report (includes extractor used, excerpt of extracted text, Gemini-extracted normalized tokens, and raw LLM response) and to save uploaded resumes to `teamskills/uploads/` for traceability.
+- Change: `teamskills/backend/github_scraper.py` and other scrapers were updated during the branch to fetch README snippets, per-repo language percentages, and to add caching and robust recent-activity counting.
+- Remove: experimental deterministic `skills_engine.py` and `skills_fallback.json` (now replaced by Gemini-driven extraction).
+
+Notes:
+- Gemini integration requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) set in the environment. To use Google Vision OCR fallback, set `GOOGLE_APPLICATION_CREDENTIALS` to your service account JSON.
+- The gemini helper uses a conservative prompt and minimal normalization by default; we should iterate on prompt templates and synonym maps for higher precision.
