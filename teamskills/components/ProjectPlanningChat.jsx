@@ -24,11 +24,35 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    const newMessage = { id: Date.now(), role: 'user', content: input.trim() };
+    const userMessageContent = input.trim();
+    const newMessage = { id: Date.now(), role: 'user', content: userMessageContent };
     const newMessages = [...messages, newMessage];
     
+    // Check if the user is confirming the end of planning
+    const isDelegatingConfirmation = userMessageContent.toLowerCase().trim() === 'yes';
+    
+    // Special handling for confirmation message: skip API call and transition
+    if (isDelegatingConfirmation) {
+        setMessages(newMessages);
+        setInput('');
+        
+        // Add a final confirmation message from the bot before transitioning
+        const confirmationMessage = {
+            id: Date.now() + 1,
+            role: 'model',
+            content: 'Acknowledged. Moving to the Team Input phase now!',
+        };
+        
+        setMessages(prev => [...prev, confirmationMessage]);
+
+        // Delay the transition slightly to allow UI to update
+        setTimeout(onDonePlanning, 500); 
+        return;
+    }
+    
+    // Standard conversation flow
+    setInput(''); // Clear input immediately
     setMessages(newMessages);
-    setInput('');
     setIsLoading(true);
 
     try {
@@ -66,10 +90,23 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Check if the plan is ready (example condition: bot confirms readiness)
-  const isPlanReady = messages.some(
-    (msg) => msg.role === 'model' && msg.content.toLowerCase().includes('plan is finalized')
+  // The chat should prompt after 2 messages of back and forth (1 initial model + 1 user + 1 model = 3 messages total).
+  const isPromptTime = messages.length === 3 && messages[messages.length - 1].role === 'model';
+  
+  // Check if the user has already confirmed, to prevent the button from reappearing
+  const isDelegating = messages.some(
+    (msg) => msg.role === 'user' && msg.content.toLowerCase().trim() === 'yes'
   );
+
+  const showPromptButton = isPromptTime && !isDelegating;
+  
+  // Conditionally create a temporary message object for display when it's time to prompt
+  const displayPromptMessage = showPromptButton ? { 
+    id: 9999, 
+    role: 'model', 
+    content: 'Are you ready to start delegating tasks?',
+    isTemporary: true
+  } : null;
 
   return (
     <Card className="w-full max-w-4xl mx-auto shadow-xl h-[70vh] flex flex-col">
@@ -95,33 +132,48 @@ export default function ProjectPlanningChat({ onDonePlanning }) {
             </div>
           </div>
         ))}
+        
+        {/* Temporary Prompt Message */}
+        {displayPromptMessage && (
+            <div
+                key={displayPromptMessage.id}
+                className={`flex justify-start`}
+            >
+                <div
+                    className={`max-w-[70%] p-3 rounded-xl shadow-md bg-muted text-foreground`}
+                >
+                    <p className="whitespace-pre-wrap">{displayPromptMessage.content}</p>
+                </div>
+            </div>
+        )}
+        
         <div ref={messagesEndRef} />
       </CardContent>
 
       {/* Input and Action Buttons */}
       <CardFooter className="flex flex-col border-t p-4 space-y-3">
-        {isPlanReady ? (
+        {showPromptButton && (
           <Button 
             className="w-full" 
-            onClick={onDonePlanning} // Function passed from parent to advance phase
+            onClick={() => setInput('Yes')} // Autofill the input box with "Yes"
             disabled={isLoading}
           >
-            <Check className="mr-2 h-4 w-4" /> Done Planning! Go to Team Input
+            Yes
           </Button>
-        ) : (
-          <form onSubmit={sendMessage} className="flex w-full space-x-2">
-            <Input
-              placeholder="What kind of project are you building?..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={isLoading}
-              className="flex-grow"
-            />
-            <Button type="submit" disabled={isLoading} size="icon">
-              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
-          </form>
         )}
+        
+        <form onSubmit={sendMessage} className="flex w-full space-x-2">
+          <Input
+            placeholder="What kind of project are you building?..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={isLoading}
+            className="flex-grow"
+          />
+          <Button type="submit" disabled={isLoading} size="icon">
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </Button>
+        </form>
       </CardFooter>
     </Card>
   );
