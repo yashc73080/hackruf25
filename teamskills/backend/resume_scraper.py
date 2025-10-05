@@ -23,6 +23,15 @@ import io
 import os
 import sys
 from typing import List
+import json
+
+# local helper (Gemini)
+try:
+    from .gemini_helper import extract_skills_from_text  # type: ignore
+except Exception:
+    # Allow the module to run even if gemini_helper isn't available yet.
+    def extract_skills_from_text(text: str, source: str = "resume"):
+        return {"tokens_normalized": [], "raw": "_no_gemini_helper"}
 
 # --- Optional imports guarded at use-time ---
 def _import_pdfplumber():
@@ -162,10 +171,39 @@ def main():
             print(f"ERROR: Extraction failed: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Write output
+    # Build a richer Markdown report instead of a plain text dump
+    report = []
+    report.append(f"# Resume Extraction Report\n")
+    report.append(f"- source_file: `{in_path}`")
+    report.append(f"- extractor_used: `{used}`")
+    report.append(f"- chars_extracted: {len(extracted)}\n")
+
+    report.append("## Extracted Text (first 30k chars)\n")
+    report.append("```\n" + (extracted[:30000] if extracted else "") + "\n```")
+
+    # call Gemini helper to extract skills (if available)
+    try:
+        gem_resp = extract_skills_from_text(extracted or "", source="resume")
+    except Exception as e:
+        gem_resp = {"tokens_normalized": [], "raw": f"_error:{e}"}
+
+    tokens = gem_resp.get("tokens_normalized") or []
+    report.append("## Extracted Skills\n")
+    if tokens:
+        for t in tokens:
+            report.append(f"- `{t}`")
+    else:
+        report.append("_No skills extracted._")
+
+    # include raw LLM output for debugging
+    report.append("## LLM Raw Response\n")
+    raw = gem_resp.get("raw")
+    report.append("```json\n" + json.dumps(raw if isinstance(raw, (dict, list)) else str(raw), indent=2) + "\n```")
+
+    # Write markdown report
     try:
         with open(out_path, "w", encoding="utf-8") as f:
-            f.write(extracted or "")
+            f.write("\n\n".join(report))
     except Exception as e:
         print(f"ERROR: Could not write output file: {out_path} ({e})", file=sys.stderr)
         sys.exit(1)
