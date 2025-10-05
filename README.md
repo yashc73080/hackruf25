@@ -1,4 +1,4 @@
-# SkillSync (hackruf25)
+# SkillSync (HackRU Fall 2025)
 
 An AI-powered teammate-to-role matching tool that analyzes resumes and GitHub profiles, extracts ranked skills, and assigns the best person to each project role using Gemini embeddings and cosine similarity. The web app runs on Next.js (App Router) for the frontend and FastAPI for backend APIs.
 
